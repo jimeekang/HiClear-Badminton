@@ -33,6 +33,9 @@ yarn-error.log*
 # env files (can opt-in for committing if needed)
 .env*
 
+# Firebase App Hosting example (real config tracked separately)
+apphosting.example.yaml
+
 # vercel
 .vercel
 

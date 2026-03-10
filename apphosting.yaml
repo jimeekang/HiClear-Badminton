@@ -8,32 +8,43 @@ runConfig:
 
 env:
   - variable: NEXT_PUBLIC_FIREBASE_API_KEY
-    secret: FIREBASE_API_KEY
+    value: AIzaSyDWGnEzi44-QGaowZxDUuWq6oyUeV3sEHI
     availability:
       - BUILD
       - RUNTIME
+
   - variable: NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN
-    secret: FIREBASE_AUTH_DOMAIN
+    value: hiclear-badminton.firebaseapp.com
     availability:
       - BUILD
       - RUNTIME
+
   - variable: NEXT_PUBLIC_FIREBASE_PROJECT_ID
-    secret: FIREBASE_PROJECT_ID
+    value: hiclear-badminton
     availability:
       - BUILD
       - RUNTIME
+
   - variable: NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET
-    secret: FIREBASE_STORAGE_BUCKET
+    value: hiclear-badminton.firebasestorage.app
     availability:
       - BUILD
       - RUNTIME
+
   - variable: NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID
-    secret: FIREBASE_MESSAGING_SENDER_ID
+    value: 1073033021906
     availability:
       - BUILD
       - RUNTIME
+
   - variable: NEXT_PUBLIC_FIREBASE_APP_ID
-    secret: FIREBASE_APP_ID
+    value: 1:1073033021906:web:73e6b0a3b278481dd1e00b
+    availability:
+      - BUILD
+      - RUNTIME
+
+  - variable: NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID
+    value: G-9CBB61KXYD
     availability:
       - BUILD
       - RUNTIME
