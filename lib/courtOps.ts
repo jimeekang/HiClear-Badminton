@@ -1,7 +1,7 @@
 import { doc, updateDoc, deleteDoc, arrayUnion, arrayRemove } from "firebase/firestore";
 import { db } from "./firebase";
 import { Court } from "@/types";
-import { addPlayerToQueue } from "./queue";
+import { addPlayerToQueue, pushTeamToQueue } from "./queue";
 
 export async function assignPlayerToCourt(
   court: Court,
@@ -27,6 +27,15 @@ export async function removePlayerFromCourt(
   await Promise.all([
     updateDoc(doc(db, "courts", court.id), { [field]: arrayRemove(playerId) }),
     addPlayerToQueue(playerId),
+  ]);
+}
+
+export async function sendCourtPlayersToQueue(court: Court): Promise<void> {
+  const all = [...court.teamA, ...court.teamB];
+  if (all.length === 0) return;
+  await Promise.all([
+    pushTeamToQueue(all),
+    updateDoc(doc(db, "courts", court.id), { teamA: [], teamB: [], gamesA: 0, gamesB: 0 }),
   ]);
 }
 

@@ -75,7 +75,7 @@ export default function PlayersPage() {
     <div className="flex h-[calc(100vh-72px)]">
       {/* Left: Registration panel */}
       <div className="w-96 bg-white border-r border-gray-200 flex flex-col p-5 gap-4">
-        <h2 className="text-2xl font-bold">선수 등록</h2>
+        <h2 className="text-2xl font-bold text-blue-900">선수 등록</h2>
 
         <input
           ref={inputRef}
@@ -85,7 +85,7 @@ export default function PlayersPage() {
           onChange={(e) => { setName(e.target.value); nameRef.current = e.target.value; }}
           onKeyDown={(e) => e.key === "Enter" && handleAdd()}
           autoFocus
-          className="border-2 border-gray-300 rounded-xl px-4 text-2xl focus:outline-none focus:border-blue-400"
+          className="border-2 border-blue-200 rounded-xl px-4 text-2xl focus:outline-none focus:border-blue-600 bg-white"
           style={{ height: 64 }}
         />
 
@@ -113,7 +113,7 @@ export default function PlayersPage() {
         <button
           onClick={() => setAutoQueue((v) => !v)}
           className={`flex items-center gap-3 px-4 rounded-xl border-2 text-xl font-medium transition-colors ${
-            autoQueue ? "border-blue-400 bg-blue-50 text-blue-700" : "border-gray-200 bg-gray-50 text-gray-400"
+            autoQueue ? "border-blue-500 bg-blue-100 text-blue-800" : "border-blue-200 bg-white text-blue-400"
           }`}
           style={{ height: 56 }}
         >
@@ -136,7 +136,7 @@ export default function PlayersPage() {
       </div>
 
       {/* Right: Player list */}
-      <div className="flex-1 overflow-y-auto p-5">
+      <div className="flex-1 overflow-y-auto p-5 bg-white">
         <div className="flex items-center gap-4 mb-4">
           <h2 className="text-2xl font-bold">선수 목록 <span className="text-gray-400 font-normal text-xl">({players.length}명)</span></h2>
           <input
@@ -177,13 +177,10 @@ export default function PlayersPage() {
                     return (
                       <div
                         key={p.id}
-                        className={`flex items-center gap-2 rounded-xl px-3 shadow border ${
-                          gender === "M" ? "bg-blue-50 border-blue-100" : "bg-pink-50 border-pink-100"
-                        }`}
+                        className="flex items-center gap-2 rounded-xl px-3 shadow border bg-white border-gray-100"
                         style={{ height: 64 }}
                       >
                         <span className="text-xl font-semibold flex-1 truncate">{p.name}</span>
-                        <span className="text-gray-400 text-sm w-12 text-right shrink-0">{p.gamesPlayed}G</span>
 
                         <button
                           onClick={() => updatePlayerGender(p.id, p.gender === "M" ? "F" : "M")}
@@ -225,9 +222,7 @@ export default function PlayersPage() {
                     );
                   })}
                   {list.length === 0 && (
-                    <div className={`text-center text-gray-400 py-8 text-lg rounded-xl ${
-                      gender === "M" ? "bg-blue-50/50" : "bg-pink-50/50"
-                    }`}>
+                    <div className="text-center text-gray-400 py-8 text-lg rounded-xl bg-gray-50">
                       {search ? "검색 결과 없음" : "등록된 선수 없음"}
                     </div>
                   )}

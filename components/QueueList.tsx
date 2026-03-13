@@ -48,29 +48,29 @@ function SortableItem({
         transform: CSS.Transform.toString(transform),
         transition,
         opacity: isDragging ? 0.5 : 1,
-        height: 64,
+        height: 48,
       }}
-      className="flex items-center gap-2 bg-white rounded-xl shadow border border-gray-100"
+      className="flex items-center gap-2 bg-white rounded-lg shadow border border-gray-100"
     >
       <div
         {...attributes}
         {...listeners}
-        className="flex items-center justify-center px-3 text-gray-300 cursor-grab active:cursor-grabbing select-none h-full"
+        className="flex items-center justify-center px-2 text-gray-300 cursor-grab active:cursor-grabbing select-none h-full"
         style={{ touchAction: "none" }}
       >
-        <svg width="16" height="24" viewBox="0 0 16 24" fill="currentColor">
+        <svg width="14" height="20" viewBox="0 0 16 24" fill="currentColor">
           <circle cx="5" cy="6" r="2" /><circle cx="11" cy="6" r="2" />
           <circle cx="5" cy="12" r="2" /><circle cx="11" cy="12" r="2" />
           <circle cx="5" cy="18" r="2" /><circle cx="11" cy="18" r="2" />
         </svg>
       </div>
 
-      <span className="text-gray-400 font-bold w-7 text-lg text-center">{index + 1}</span>
-      <span className="flex-1 text-xl font-semibold truncate">{player?.name ?? "..."}</span>
+      <span className="text-gray-400 font-bold w-6 text-base text-center">{index + 1}</span>
+      <span className="flex-1 text-lg font-semibold truncate">{player?.name ?? "..."}</span>
 
       <button
         onClick={(e) => { e.stopPropagation(); onRemove(); }}
-        className="flex items-center justify-center w-10 h-full text-gray-300 hover:text-red-400 hover:bg-red-50 rounded-r-xl transition-colors text-xl"
+        className="flex items-center justify-center w-8 h-full text-gray-300 hover:text-red-400 hover:bg-red-50 rounded-r-lg transition-colors text-base"
       >
         ✕
       </button>

@@ -11,7 +11,7 @@ const links = [
 export default function NavBar() {
   const pathname = usePathname();
   return (
-    <nav className="bg-blue-600 text-white px-6 flex gap-2 items-center" style={{ height: 72 }}>
+    <nav className="bg-black text-white px-6 flex gap-2 items-center" style={{ height: 72 }}>
       <span className="text-3xl font-bold mr-6">HiClear 🏸</span>
       {links.map(({ href, label }) => {
         const active = pathname === href || pathname.startsWith(href + "/");
@@ -21,8 +21,8 @@ export default function NavBar() {
             href={href}
             className={`text-2xl font-semibold px-5 py-2 rounded-xl transition-colors ${
               active
-                ? "bg-white text-blue-600"
-                : "text-blue-100 hover:bg-white/20 hover:text-white"
+                ? "bg-white text-black"
+                : "text-gray-400 hover:bg-white/20 hover:text-white"
             }`}
           >
             {label}
