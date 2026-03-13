@@ -1,5 +1,6 @@
 "use client";
 import Link from "next/link";
+import Image from "next/image";
 import { usePathname } from "next/navigation";
 
 const links = [
@@ -12,7 +13,16 @@ export default function NavBar() {
   const pathname = usePathname();
   return (
     <nav className="bg-black text-white px-6 flex gap-2 items-center" style={{ height: 72 }}>
-      <span className="text-3xl font-bold mr-6">HiClear 🏸</span>
+      <div className="mr-6">
+        <Image
+          src="/logo.png.jpg"
+          alt="HiClear"
+          width={100}
+          height={32}
+          style={{ filter: "invert(1)", objectFit: "contain" }}
+          priority
+        />
+      </div>
       {links.map(({ href, label }) => {
         const active = pathname === href || pathname.startsWith(href + "/");
         return (
