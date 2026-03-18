@@ -1,5 +1,5 @@
 "use client";
-import { useState, useEffect, useCallback, useRef } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import { usePlayers, useQueue, useCourts } from "@/hooks/useFirestore";
 import CourtCard from "@/components/CourtCard";
 import { addCourt } from "@/lib/db";
@@ -10,7 +10,7 @@ import {
   DndContext, closestCenter, MouseSensor, TouchSensor, useSensor, useSensors, DragEndEvent,
 } from "@dnd-kit/core";
 import {
-  SortableContext, verticalListSortingStrategy, useSortable, arrayMove,
+  SortableContext, verticalListSortingStrategy, rectSortingStrategy, useSortable, arrayMove,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { writeBatch, doc } from "firebase/firestore";
@@ -64,6 +64,35 @@ interface PendingSlot {
   team: "A" | "B";
 }
 
+function SortableCourtCard(props: React.ComponentProps<typeof CourtCard>) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: props.court.id });
+  return (
+    <div
+      ref={setNodeRef}
+      style={{ transform: CSS.Transform.toString(transform), transition }}
+      className={isDragging ? "opacity-50 z-50" : ""}
+    >
+      <CourtCard
+        {...props}
+        dragHandle={
+          <div
+            {...attributes}
+            {...listeners}
+            className="flex items-center justify-center w-5 text-gray-400 hover:text-gray-200 cursor-grab active:cursor-grabbing select-none shrink-0"
+            style={{ touchAction: "none" }}
+          >
+            <svg width="10" height="16" viewBox="0 0 16 24" fill="currentColor">
+              <circle cx="5" cy="4" r="2" /><circle cx="11" cy="4" r="2" />
+              <circle cx="5" cy="12" r="2" /><circle cx="11" cy="12" r="2" />
+              <circle cx="5" cy="20" r="2" /><circle cx="11" cy="20" r="2" />
+            </svg>
+          </div>
+        }
+      />
+    </div>
+  );
+}
+
 export default function CourtsPage() {
   const players = usePlayers();
   const queue = useQueue();
@@ -72,14 +101,53 @@ export default function CourtsPage() {
   const [showAddForm, setShowAddForm] = useState(false);
   const [courtNumber, setCourtNumber] = useState("");
   const [pendingSlot, setPendingSlot] = useState<PendingSlot | null>(null);
+  const [activeCourtId, setActiveCourtId] = useState<string | null>(null);
   const [history, setHistory] = useState<AppSnapshot[]>([]);
   const [future, setFuture] = useState<AppSnapshot[]>([]);
   const [undoLoading, setUndoLoading] = useState(false);
 
+  const [localCourts, setLocalCourts] = useState<typeof courts>([]);
+  const courtDraggingRef = useRef(false);
   const [localMaleQueue, setLocalMaleQueue] = useState<QueueEntry[]>([]);
   const [localFemaleQueue, setLocalFemaleQueue] = useState<QueueEntry[]>([]);
   const maleDraggingRef = useRef(false);
   const femaleDraggingRef = useRef(false);
+
+  const courtSensors = useSensors(
+    useSensor(MouseSensor, { activationConstraint: { distance: 5 } }),
+    useSensor(TouchSensor, { activationConstraint: { delay: 150, tolerance: 5 } })
+  );
+
+  // courts Firestore 업데이트 → localCourts 동기화 (드래그 중이 아닐 때)
+  useEffect(() => {
+    if (courtDraggingRef.current) return;
+    setLocalCourts((prev) => {
+      if (prev.length === 0) {
+        // 초기 로드: order 필드 기준 정렬, 없으면 Firestore 순서 유지
+        return [...courts].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+      }
+      // 데이터 업데이트: 로컬 순서 유지하면서 각 코트 데이터 갱신
+      const courtMap = new Map(courts.map((c) => [c.id, c]));
+      const updated = prev.map((c) => courtMap.get(c.id)).filter(Boolean) as typeof courts;
+      courts.forEach((c) => { if (!prev.find((p) => p.id === c.id)) updated.push(c); });
+      return updated;
+    });
+  }, [courts]);
+
+  const handleCourtDragEnd = async (event: DragEndEvent) => {
+    const { active, over } = event;
+    courtDraggingRef.current = false;
+    if (!over || active.id === over.id) return;
+    const oldIdx = localCourts.findIndex((c) => c.id === active.id);
+    const newIdx = localCourts.findIndex((c) => c.id === over.id);
+    const reordered = arrayMove(localCourts, oldIdx, newIdx);
+    setLocalCourts(reordered);
+    const batch = writeBatch(db);
+    reordered.forEach((court, idx) => {
+      batch.update(doc(db, "courts", court.id), { order: idx });
+    });
+    await batch.commit();
+  };
 
   const queueSensors = useSensors(
     useSensor(MouseSensor, { activationConstraint: { distance: 5 } }),
@@ -181,7 +249,7 @@ export default function CourtsPage() {
   const handleSlotClick = (courtId: string, team: "A" | "B") => {
     const court = courts.find((c) => c.id === courtId);
     if (!court) return;
-    // 이미 2명이면 패널 열지 않음
+    setActiveCourtId(courtId);
     const teamPlayers = team === "A" ? court.teamA : court.teamB;
     if (teamPlayers.length >= 2) return;
     setPendingSlot({ courtId, team });
@@ -294,25 +362,36 @@ export default function CourtsPage() {
         )}
 
         {/* 코트 그리드 */}
-        {courts.length === 0 ? (
+        {localCourts.length === 0 ? (
           <div className="text-center text-gray-400 py-24 text-2xl">
             <div className="text-6xl mb-4">🏸</div>
             <div>코트가 없습니다.</div>
             <div className="text-xl mt-2">위의 버튼으로 코트를 추가하세요.</div>
           </div>
         ) : (
-          <div className="grid grid-cols-2 xl:grid-cols-4 gap-3">
-            {courts.map((court) => (
-              <CourtCard
-                key={court.id}
-                court={court}
-                players={players}
-                queue={queue}
-                onSlotClick={handleSlotClick}
-                onBeforeAction={saveSnapshot}
-              />
-            ))}
-          </div>
+          <DndContext
+            sensors={courtSensors}
+            collisionDetection={closestCenter}
+            onDragStart={() => { courtDraggingRef.current = true; }}
+            onDragEnd={handleCourtDragEnd}
+            onDragCancel={() => { courtDraggingRef.current = false; }}
+          >
+            <SortableContext items={localCourts.map((c) => c.id)} strategy={rectSortingStrategy}>
+              <div className="grid grid-cols-2 xl:grid-cols-4 gap-3">
+                {localCourts.map((court) => (
+                  <SortableCourtCard
+                    key={court.id}
+                    court={court}
+                    players={players}
+                    queue={queue}
+                    onSlotClick={handleSlotClick}
+                    isActive={activeCourtId === court.id}
+                    onBeforeAction={saveSnapshot}
+                  />
+                ))}
+              </div>
+            </SortableContext>
+          </DndContext>
         )}
       </div>
 

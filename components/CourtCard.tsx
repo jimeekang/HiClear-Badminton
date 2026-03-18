@@ -92,10 +92,12 @@ interface Props {
   players: Player[];
   queue: QueueEntry[];
   onSlotClick: (courtId: string, team: "A" | "B") => void;
+  isActive?: boolean;
+  dragHandle?: React.ReactNode;
   onBeforeAction?: () => void;
 }
 
-export default function CourtCard({ court, players, queue, onSlotClick, onBeforeAction }: Props) {
+export default function CourtCard({ court, players, queue, onSlotClick, isActive, dragHandle, onBeforeAction }: Props) {
   const [processing, setProcessing] = useState(false);
 
   const handleSendToQueue = async () => {
@@ -139,10 +141,11 @@ export default function CourtCard({ court, players, queue, onSlotClick, onBefore
   const isReady = court.teamA.length === 2 && court.teamB.length === 2;
 
   return (
-    <div className={`bg-white rounded-xl shadow-md overflow-hidden border border-gray-200 transition-opacity ${processing ? "opacity-70" : ""}`}>
+    <div className={`bg-white rounded-xl shadow-md overflow-hidden border-2 transition-all ${isActive ? "border-yellow-400 ring-2 ring-yellow-300 ring-offset-1" : "border-gray-200"} ${processing ? "opacity-70" : ""}`}>
       {/* 헤더 */}
-      <div className="flex justify-between items-center px-3 py-2 bg-gray-800 text-white">
-        <span className="text-lg font-bold">{court.name}</span>
+      <div className="flex items-center px-2 py-2 bg-gray-800 text-white gap-1.5">
+        {dragHandle}
+        <span className="text-lg font-bold flex-1">{court.name}</span>
         <div className="flex items-center gap-1.5">
           <button
             onClick={handleSendToQueue}
@@ -193,7 +196,7 @@ export default function CourtCard({ court, players, queue, onSlotClick, onBefore
         />
       </div>
 
-      {/* 승부 버튼 */}
+      {/* 나오는팀 버튼 */}
       <div className="flex gap-2 px-2 pb-2">
         <button
           onClick={() => handleResult("A")}
@@ -201,7 +204,7 @@ export default function CourtCard({ court, players, queue, onSlotClick, onBefore
           className="flex-1 bg-blue-500 text-white rounded-lg font-bold text-base disabled:opacity-30 disabled:cursor-not-allowed hover:bg-blue-600 active:scale-95 transition-all"
           style={{ height: 48 }}
         >
-          {processing ? "처리 중..." : "팀 A 승 🏆"}
+          {processing ? "처리 중..." : "A팀 나오는팀"}
         </button>
         <button
           onClick={() => handleResult("B")}
@@ -209,7 +212,7 @@ export default function CourtCard({ court, players, queue, onSlotClick, onBefore
           className="flex-1 bg-green-500 text-white rounded-lg font-bold text-base disabled:opacity-30 disabled:cursor-not-allowed hover:bg-green-600 active:scale-95 transition-all"
           style={{ height: 48 }}
         >
-          {processing ? "처리 중..." : "팀 B 승 🏆"}
+          {processing ? "처리 중..." : "B팀 나오는팀"}
         </button>
       </div>
     </div>

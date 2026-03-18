@@ -72,6 +72,7 @@ export async function addCourt(name: string): Promise<string> {
     teamB: [],
     gamesA: 0,
     gamesB: 0,
+    order: Date.now(),
     createdAt: serverTimestamp(),
   });
   return ref.id;

@@ -21,4 +21,5 @@ export interface Court {
   teamB: string[];
   gamesA?: number;
   gamesB?: number;
+  order?: number;
 }
