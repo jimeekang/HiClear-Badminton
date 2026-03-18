@@ -85,3 +85,11 @@ export async function updateCourt(id: string, data: Partial<Court>): Promise<voi
 export async function deleteCourt(id: string): Promise<void> {
   await deleteDoc(doc(db, "courts", id));
 }
+
+export async function resetAllPartnerIds(): Promise<void> {
+  const snap = await getDocs(collection(db, "players"));
+  if (snap.empty) return;
+  const batch = writeBatch(db);
+  snap.docs.forEach((d) => batch.update(d.ref, { lastPartnerIds: [] }));
+  await batch.commit();
+}

@@ -37,8 +37,15 @@ export async function processGameResult(
     });
   }
 
-  allPlayers.forEach((pid) => {
-    batch.update(doc(db, "players", pid), { gamesPlayed: increment(1) });
+  // gamesPlayed +1 & 같은 팀 파트너만 저장 (상대팀 제외)
+  [court.teamA, court.teamB].forEach((team) => {
+    team.forEach((pid, i) => {
+      const partner = team[1 - i];
+      batch.update(doc(db, "players", pid), {
+        gamesPlayed: increment(1),
+        lastPartnerIds: partner ? [partner] : [],
+      });
+    });
   });
 
   batch.update(doc(db, "courts", court.id), {

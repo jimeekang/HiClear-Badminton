@@ -5,6 +5,7 @@ export interface Player {
   name: string;
   gender: "M" | "F";
   gamesPlayed: number;
+  lastPartnerIds?: string[];
 }
 
 export interface QueueEntry {

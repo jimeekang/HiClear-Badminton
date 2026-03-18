@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import { usePlayers, useQueue, useCourts } from "@/hooks/useFirestore";
 import CourtCard from "@/components/CourtCard";
-import { addCourt } from "@/lib/db";
+import { addCourt, resetAllPartnerIds } from "@/lib/db";
 import { assignPlayerToCourt } from "@/lib/courtOps";
 import { Player, QueueEntry } from "@/types";
 import { AppSnapshot, captureSnapshot, restoreSnapshot, sendAllCourtsToQueue } from "@/lib/snapshot";
@@ -16,13 +16,14 @@ import { CSS } from "@dnd-kit/utilities";
 import { writeBatch, doc } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 
-function CourtQueueItem({ entry, index, player, gender, onClick, active }: {
+function CourtQueueItem({ entry, index, player, gender, onClick, active, hasRecentMatch }: {
   entry: QueueEntry;
   index: number;
   player?: Player;
   gender: "M" | "F";
   onClick: () => void;
   active: boolean;
+  hasRecentMatch?: boolean;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: entry.id });
   const bgClass = active
@@ -55,6 +56,11 @@ function CourtQueueItem({ entry, index, player, gender, onClick, active }: {
       </div>
       <span className="text-gray-400 font-bold w-4 text-xs shrink-0">{index + 1}</span>
       <span className="flex-1 text-xs font-semibold truncate">{player?.name ?? "..."}</span>
+      {hasRecentMatch && (
+        <span title="최근 같이 플레이한 선수" className="shrink-0 text-[10px] bg-orange-100 text-orange-500 font-bold rounded px-1 py-0.5 leading-none">
+          ↩
+        </span>
+      )}
     </div>
   );
 }
@@ -97,6 +103,12 @@ export default function CourtsPage() {
   const players = usePlayers();
   const queue = useQueue();
   const courts = useCourts();
+
+  const [toast, setToast] = useState<string | null>(null);
+  const showToast = (msg: string) => {
+    setToast(msg);
+    setTimeout(() => setToast(null), 2500);
+  };
 
   const [showAddForm, setShowAddForm] = useState(false);
   const [courtNumber, setCourtNumber] = useState("");
@@ -179,6 +191,17 @@ export default function CourtsPage() {
     setHistory((h) => [...h.slice(-9), current]);
     try { await restoreSnapshot(next, courts); } catch (e) { alert("다시실행 실패"); }
     setUndoLoading(false);
+  };
+
+  const handleResetPartners = async () => {
+    if (!confirm("모든 선수의 파트너 기록을 초기화하시겠습니까?\n(전체 게임 종료 후 새 세션 시작 시 사용)")) return;
+    try {
+      await resetAllPartnerIds();
+      showToast("파트너 기록이 초기화되었습니다.");
+    } catch (e) {
+      console.error(e);
+      showToast("초기화 중 오류가 발생했습니다.");
+    }
   };
 
   const handleSendAllToQueue = async () => {
@@ -277,6 +300,14 @@ export default function CourtsPage() {
   };
 
   const pendingCourt = courts.find((c) => c.id === pendingSlot?.courtId);
+  const courtPlayerSet = pendingCourt
+    ? new Set([...pendingCourt.teamA, ...pendingCourt.teamB])
+    : new Set<string>();
+  const checkRecentMatch = (entry: QueueEntry) => {
+    if (!pendingSlot) return false;
+    const p = getPlayer(entry.playerId);
+    return (p?.lastPartnerIds ?? []).some((id) => courtPlayerSet.has(id));
+  };
 
   // 팀이 Firestore 업데이트로 2명이 됐으면 자동으로 패널 닫기
   useEffect(() => {
@@ -289,6 +320,11 @@ export default function CourtsPage() {
 
   return (
     <div className="flex" style={{ height: "calc(100vh - 72px)" }}>
+      {toast && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 bg-gray-800 text-white text-base font-semibold px-6 py-3 rounded-xl shadow-lg">
+          {toast}
+        </div>
+      )}
       {/* 메인 코트 영역 */}
       <div className="flex-1 overflow-y-auto p-3">
         {/* 헤더 */}
@@ -326,6 +362,14 @@ export default function CourtsPage() {
             style={{ height: 40 }}
           >
             ↪ 다시실행
+          </button>
+          <button
+            onClick={handleResetPartners}
+            title="전체 게임 종료 후 파트너 기록 초기화"
+            className="px-3 rounded-lg font-bold text-base border border-orange-300 bg-white hover:bg-orange-50 transition-colors text-orange-500"
+            style={{ height: 40 }}
+          >
+            파트너 초기화
           </button>
         </div>
 
@@ -471,6 +515,7 @@ export default function CourtsPage() {
                                 gender={gender}
                                 onClick={() => handleAssign(entry)}
                                 active={!!pendingSlot}
+                                hasRecentMatch={checkRecentMatch(entry)}
                               />
                             );
                           })}
@@ -536,6 +581,11 @@ export default function CourtsPage() {
                           >
                             <span className="text-gray-400 font-bold w-7 text-lg shrink-0">{overallIdx + 1}</span>
                             <span className="flex-1 text-xl font-semibold truncate">{p?.name ?? "..."}</span>
+                            {checkRecentMatch(entry) && (
+                              <span title="최근 같이 플레이한 선수" className="shrink-0 text-xs bg-orange-100 text-orange-500 font-bold rounded px-1.5 py-0.5">
+                                ↩
+                              </span>
+                            )}
                           </button>
                         );
                       })}
