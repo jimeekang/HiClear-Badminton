@@ -16,9 +16,10 @@ import { CSS } from "@dnd-kit/utilities";
 import { writeBatch, doc } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 
-function CourtQueueItem({ entry, index, player, gender, onClick, active, hasRecentMatch }: {
+function CourtQueueItem({ entry, index, genderIndex, player, gender, onClick, active, hasRecentMatch }: {
   entry: QueueEntry;
   index: number;
+  genderIndex: number;
   player?: Player;
   gender: "M" | "F";
   onClick: () => void;
@@ -26,10 +27,19 @@ function CourtQueueItem({ entry, index, player, gender, onClick, active, hasRece
   hasRecentMatch?: boolean;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: entry.id });
-  const bgClass = active
+  const isDisabled = active && hasRecentMatch;
+  const isNext = !active && genderIndex === 0;
+
+  const bgClass = isDisabled
+    ? "bg-gray-100 border border-gray-200 opacity-50 cursor-not-allowed"
+    : active
     ? gender === "M"
       ? "bg-blue-50 border-2 border-blue-400 hover:bg-blue-100 active:scale-95 cursor-pointer"
       : "bg-pink-50 border-2 border-pink-400 hover:bg-pink-100 active:scale-95 cursor-pointer"
+    : isNext
+    ? gender === "M"
+      ? "bg-blue-100 border-2 border-blue-500 shadow-sm"
+      : "bg-pink-100 border-2 border-pink-500 shadow-sm"
     : gender === "M"
       ? "bg-blue-50/60 border border-blue-200"
       : "bg-pink-50/60 border border-pink-200";
@@ -37,8 +47,8 @@ function CourtQueueItem({ entry, index, player, gender, onClick, active, hasRece
   return (
     <div
       ref={setNodeRef}
-      style={{ transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.5 : 1, height: 40 }}
-      onClick={active ? onClick : undefined}
+      style={{ transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.5 : 1, height: isNext ? 44 : 40 }}
+      onClick={active && !isDisabled ? onClick : undefined}
       className={`flex items-center gap-1 rounded-lg transition-all ${bgClass}`}
     >
       <div
@@ -54,13 +64,8 @@ function CourtQueueItem({ entry, index, player, gender, onClick, active, hasRece
           <circle cx="5" cy="18" r="2" /><circle cx="11" cy="18" r="2" />
         </svg>
       </div>
-      <span className="text-gray-400 font-bold w-4 text-xs shrink-0">{index + 1}</span>
-      <span className="flex-1 text-xs font-semibold truncate">{player?.name ?? "..."}</span>
-      {hasRecentMatch && (
-        <span title="최근 같이 플레이한 선수" className="shrink-0 text-[10px] bg-orange-100 text-orange-500 font-bold rounded px-1 py-0.5 leading-none">
-          ↩
-        </span>
-      )}
+      <span className={`font-bold w-4 text-xs shrink-0 ${isNext ? "text-gray-600" : "text-gray-400"}`}>{index + 1}</span>
+      <span className={`flex-1 text-xs truncate ${isNext ? "font-bold text-gray-800" : "font-semibold"}`}>{player?.name ?? "..."}</span>
     </div>
   );
 }
@@ -77,6 +82,7 @@ function SortableCourtCard(props: React.ComponentProps<typeof CourtCard>) {
       ref={setNodeRef}
       style={{ transform: CSS.Transform.toString(transform), transition }}
       className={isDragging ? "opacity-50 z-50" : ""}
+      onClick={(e) => { e.stopPropagation(); props.onActivate?.(); }}
     >
       <CourtCard
         {...props}
@@ -110,6 +116,7 @@ export default function CourtsPage() {
     setTimeout(() => setToast(null), 2500);
   };
 
+  const [autoFillLoading, setAutoFillLoading] = useState(false);
   const [showAddForm, setShowAddForm] = useState(false);
   const [courtNumber, setCourtNumber] = useState("");
   const [pendingSlot, setPendingSlot] = useState<PendingSlot | null>(null);
@@ -261,6 +268,55 @@ export default function CourtsPage() {
     await batch.commit();
   };
 
+  const handleAutoFill = async () => {
+    const emptyCourts = localCourts.filter((c) => c.teamA.length < 2 || c.teamB.length < 2);
+    if (emptyCourts.length === 0) { showToast("빈 슬롯이 있는 코트가 없습니다."); return; }
+
+    saveSnapshot();
+    const usedIds = new Set<string>();
+    const assignments: { court: typeof courts[0]; team: "A" | "B"; playerId: string; entryId: string }[] = [];
+
+    for (const court of emptyCourts) {
+      for (const team of ["A", "B"] as const) {
+        const teamPlayers = team === "A" ? court.teamA : court.teamB;
+        if (teamPlayers.length >= 2) continue;
+
+        const emptyCount = 2 - teamPlayers.length;
+        const existingGenders = teamPlayers.map((id) => getPlayer(id)?.gender);
+        const toFill: ("M" | "F")[] =
+          emptyCount === 2 ? ["M", "F"] : [existingGenders.includes("M") ? "F" : "M"];
+
+        for (const gender of toFill) {
+          const gq = gender === "M" ? localMaleQueue : localFemaleQueue;
+          const plannedIds = assignments.filter((a) => a.court.id === court.id).map((a) => a.playerId);
+          const courtSet = new Set([...court.teamA, ...court.teamB, ...plannedIds]);
+
+          for (const entry of gq) {
+            if (usedIds.has(entry.playerId)) continue;
+            const player = getPlayer(entry.playerId);
+            const conflict = (player?.lastPartnerIds ?? []).some((id) => courtSet.has(id));
+            if (!conflict) {
+              assignments.push({ court, team, playerId: entry.playerId, entryId: entry.id });
+              usedIds.add(entry.playerId);
+              break;
+            }
+          }
+        }
+      }
+    }
+
+    if (assignments.length === 0) { showToast("배정 가능한 선수가 없습니다."); return; }
+    setAutoFillLoading(true);
+    try {
+      for (const a of assignments) {
+        await assignPlayerToCourt(a.court, a.team, a.playerId, a.entryId);
+      }
+      showToast(`${assignments.length}명 자동 배정 완료`);
+    } finally {
+      setAutoFillLoading(false);
+    }
+  };
+
   const handleAddCourt = async () => {
     const name = courtNumber.trim();
     if (!name) return;
@@ -319,7 +375,7 @@ export default function CourtsPage() {
   }, [pendingCourt, pendingSlot]);
 
   return (
-    <div className="flex" style={{ height: "calc(100vh - 72px)" }}>
+    <div className="flex" style={{ height: "calc(100vh - 72px)" }} onClick={() => setActiveCourtId(null)}>
       {toast && (
         <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 bg-gray-800 text-white text-base font-semibold px-6 py-3 rounded-xl shadow-lg">
           {toast}
@@ -337,6 +393,14 @@ export default function CourtsPage() {
             style={{ height: 40 }}
           >
             + 코트 추가
+          </button>
+          <button
+            onClick={handleAutoFill}
+            disabled={autoFillLoading}
+            className="bg-violet-500 text-white px-4 rounded-lg font-bold text-base hover:bg-violet-600 disabled:opacity-40 transition-colors"
+            style={{ height: 40 }}
+          >
+            {autoFillLoading ? "배정 중..." : "자동 넣기"}
           </button>
           <button
             onClick={handleSendAllToQueue}
@@ -431,6 +495,7 @@ export default function CourtsPage() {
                     onSlotClick={handleSlotClick}
                     isActive={activeCourtId === court.id}
                     onBeforeAction={saveSnapshot}
+                    onActivate={() => setActiveCourtId(court.id)}
                   />
                 ))}
               </div>
@@ -504,13 +569,14 @@ export default function CourtsPage() {
                     >
                       <SortableContext items={localQ.map(e => e.id)} strategy={verticalListSortingStrategy}>
                         <div className="space-y-1">
-                          {localQ.map((entry) => {
+                          {localQ.map((entry, genderIdx) => {
                             const overallIdx = availableQueue.findIndex(e => e.id === entry.id);
                             return (
                               <CourtQueueItem
                                 key={entry.id}
                                 entry={entry}
                                 index={overallIdx}
+                                genderIndex={genderIdx}
                                 player={getPlayer(entry.playerId)}
                                 gender={gender}
                                 onClick={() => handleAssign(entry)}
@@ -570,22 +636,23 @@ export default function CourtsPage() {
                       {genderQueue.map((entry) => {
                         const overallIdx = availableQueue.findIndex((e) => e.id === entry.id);
                         const p = getPlayer(entry.playerId);
+                        const recentMatch = checkRecentMatch(entry);
                         return (
                           <button
                             key={entry.id}
-                            onClick={() => handleAssign(entry)}
-                            className={`w-full flex items-center gap-3 border-2 rounded-xl px-3 hover:opacity-80 active:scale-95 transition-all ${
-                              gender === "M" ? "bg-blue-50 border-blue-300" : "bg-pink-50 border-pink-300"
+                            onClick={recentMatch ? undefined : () => handleAssign(entry)}
+                            disabled={recentMatch}
+                            className={`w-full flex items-center gap-3 border-2 rounded-xl px-3 transition-all ${
+                              recentMatch
+                                ? "bg-gray-100 border-gray-200 opacity-50 cursor-not-allowed"
+                                : gender === "M"
+                                ? "bg-blue-50 border-blue-300 hover:opacity-80 active:scale-95"
+                                : "bg-pink-50 border-pink-300 hover:opacity-80 active:scale-95"
                             }`}
                             style={{ height: 64 }}
                           >
                             <span className="text-gray-400 font-bold w-7 text-lg shrink-0">{overallIdx + 1}</span>
                             <span className="flex-1 text-xl font-semibold truncate">{p?.name ?? "..."}</span>
-                            {checkRecentMatch(entry) && (
-                              <span title="최근 같이 플레이한 선수" className="shrink-0 text-xs bg-orange-100 text-orange-500 font-bold rounded px-1.5 py-0.5">
-                                ↩
-                              </span>
-                            )}
                           </button>
                         );
                       })}

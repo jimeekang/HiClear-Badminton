@@ -1,8 +1,8 @@
 "use client";
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 import { Court, Player, QueueEntry } from "@/types";
 import { processGameResult } from "@/lib/game";
-import { deleteCourt } from "@/lib/db";
+import { deleteCourt, updateCourt } from "@/lib/db";
 import { pushTeamToQueue } from "@/lib/queue";
 import { removePlayerFromCourt, sendCourtPlayersToQueue } from "@/lib/courtOps";
 
@@ -95,10 +95,25 @@ interface Props {
   isActive?: boolean;
   dragHandle?: React.ReactNode;
   onBeforeAction?: () => void;
+  onActivate?: () => void;
 }
 
 export default function CourtCard({ court, players, queue, onSlotClick, isActive, dragHandle, onBeforeAction }: Props) {
   const [processing, setProcessing] = useState(false);
+  const [editingName, setEditingName] = useState(false);
+  const [nameInput, setNameInput] = useState(court.name);
+  const nameInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (editingName) nameInputRef.current?.select();
+  }, [editingName]);
+
+  const handleNameSubmit = async () => {
+    const trimmed = nameInput.trim();
+    setEditingName(false);
+    if (!trimmed || trimmed === court.name) { setNameInput(court.name); return; }
+    await updateCourt(court.id, { name: trimmed });
+  };
 
   const handleSendToQueue = async () => {
     const count = court.teamA.length + court.teamB.length;
@@ -141,11 +156,28 @@ export default function CourtCard({ court, players, queue, onSlotClick, isActive
   const isReady = court.teamA.length === 2 && court.teamB.length === 2;
 
   return (
-    <div className={`bg-white rounded-xl shadow-md overflow-hidden border-2 transition-all ${isActive ? "border-yellow-400 ring-2 ring-yellow-300 ring-offset-1" : "border-gray-200"} ${processing ? "opacity-70" : ""}`}>
+    <div className={`bg-white rounded-xl shadow-md overflow-hidden border-2 transition-all ${isActive ? "border-orange-400 ring-4 ring-orange-300 ring-offset-2 shadow-orange-200 shadow-lg" : "border-gray-200"} ${processing ? "opacity-70" : ""}`}>
       {/* 헤더 */}
-      <div className="flex items-center px-2 py-2 bg-gray-800 text-white gap-1.5">
+      <div className={`flex items-center px-2 py-2 text-white gap-1.5 transition-colors ${isActive ? "bg-orange-500" : "bg-gray-800"}`}>
         {dragHandle}
-        <span className="text-lg font-bold flex-1">{court.name}</span>
+        {editingName ? (
+          <input
+            ref={nameInputRef}
+            value={nameInput}
+            onChange={(e) => setNameInput(e.target.value)}
+            onBlur={handleNameSubmit}
+            onKeyDown={(e) => { if (e.key === "Enter") handleNameSubmit(); if (e.key === "Escape") { setEditingName(false); setNameInput(court.name); } }}
+            className="flex-1 bg-white/20 text-white font-bold text-lg rounded px-1 outline-none border border-white/50 min-w-0"
+          />
+        ) : (
+          <button
+            onClick={() => { setNameInput(court.name); setEditingName(true); }}
+            title="탭하여 이름 변경"
+            className="flex-1 text-lg font-bold text-left hover:text-yellow-300 transition-colors truncate"
+          >
+            {court.name}
+          </button>
+        )}
         <div className="flex items-center gap-1.5">
           <button
             onClick={handleSendToQueue}
