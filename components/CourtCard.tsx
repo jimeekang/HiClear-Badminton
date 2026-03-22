@@ -108,6 +108,10 @@ export default function CourtCard({ court, players, queue, onSlotClick, isActive
     if (editingName) nameInputRef.current?.select();
   }, [editingName]);
 
+  useEffect(() => {
+    setNameInput(court.name);
+  }, [court.name]);
+
   const handleNameSubmit = async () => {
     const trimmed = nameInput.trim();
     setEditingName(false);

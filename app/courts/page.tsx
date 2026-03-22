@@ -27,7 +27,7 @@ function CourtQueueItem({ entry, index, genderIndex, player, gender, onClick, ac
   hasRecentMatch?: boolean;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: entry.id });
-  const isDisabled = active && hasRecentMatch;
+  const isDisabled = hasRecentMatch;
   const isNext = !active && genderIndex === 0;
 
   const bgClass = isDisabled
@@ -272,9 +272,9 @@ export default function CourtsPage() {
     const emptyCourts = localCourts.filter((c) => c.teamA.length < 2 || c.teamB.length < 2);
     if (emptyCourts.length === 0) { showToast("빈 슬롯이 있는 코트가 없습니다."); return; }
 
-    saveSnapshot();
     const usedIds = new Set<string>();
     const assignments: { court: typeof courts[0]; team: "A" | "B"; playerId: string; entryId: string }[] = [];
+    let totalSlots = 0;
 
     for (const court of emptyCourts) {
       for (const team of ["A", "B"] as const) {
@@ -285,6 +285,8 @@ export default function CourtsPage() {
         const existingGenders = teamPlayers.map((id) => getPlayer(id)?.gender);
         const toFill: ("M" | "F")[] =
           emptyCount === 2 ? ["M", "F"] : [existingGenders.includes("M") ? "F" : "M"];
+
+        totalSlots += toFill.length;
 
         for (const gender of toFill) {
           const gq = gender === "M" ? localMaleQueue : localFemaleQueue;
@@ -306,12 +308,18 @@ export default function CourtsPage() {
     }
 
     if (assignments.length === 0) { showToast("배정 가능한 선수가 없습니다."); return; }
+
+    saveSnapshot();
     setAutoFillLoading(true);
     try {
       for (const a of assignments) {
         await assignPlayerToCourt(a.court, a.team, a.playerId, a.entryId);
       }
-      showToast(`${assignments.length}명 자동 배정 완료`);
+      const skipped = totalSlots - assignments.length;
+      showToast(skipped > 0
+        ? `${assignments.length}명 배정 완료 (${skipped}개 슬롯 미배정)`
+        : `${assignments.length}명 자동 배정 완료`
+      );
     } finally {
       setAutoFillLoading(false);
     }
@@ -640,7 +648,7 @@ export default function CourtsPage() {
                         return (
                           <button
                             key={entry.id}
-                            onClick={recentMatch ? undefined : () => handleAssign(entry)}
+                            onClick={() => handleAssign(entry)}
                             disabled={recentMatch}
                             className={`w-full flex items-center gap-3 border-2 rounded-xl px-3 transition-all ${
                               recentMatch
