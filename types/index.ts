@@ -6,6 +6,8 @@ export interface Player {
   gender: "M" | "F";
   gamesPlayed: number;
   lastPartnerIds?: string[];
+  partnerIds?: string[];
+  opponentIds?: string[];
 }
 
 export interface QueueEntry {

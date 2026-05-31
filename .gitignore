@@ -42,3 +42,6 @@ apphosting.example.yaml
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+.gstack/
+.codex/
+.claude/settings.local.json

@@ -1,4 +1,4 @@
-import { doc, collection, writeBatch, increment, serverTimestamp } from "firebase/firestore";
+import { doc, collection, writeBatch, increment, serverTimestamp, arrayUnion } from "firebase/firestore";
 import { db } from "./firebase";
 import { Court, QueueEntry } from "@/types";
 
@@ -37,14 +37,21 @@ export async function processGameResult(
     });
   }
 
-  // gamesPlayed +1 & 같은 팀 파트너만 저장 (상대팀 제외)
-  [court.teamA, court.teamB].forEach((team) => {
+  [
+    { team: court.teamA, opponents: court.teamB },
+    { team: court.teamB, opponents: court.teamA },
+  ].forEach(({ team, opponents }) => {
     team.forEach((pid, i) => {
       const partner = team[1 - i];
-      batch.update(doc(db, "players", pid), {
+      const updateData: Record<string, unknown> = {
         gamesPlayed: increment(1),
         lastPartnerIds: partner ? [partner] : [],
-      });
+      };
+
+      if (partner) updateData.partnerIds = arrayUnion(partner);
+      if (opponents.length > 0) updateData.opponentIds = arrayUnion(...opponents);
+
+      batch.update(doc(db, "players", pid), updateData);
     });
   });
 

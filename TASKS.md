@@ -121,4 +121,21 @@ Add AUTO FILL COURTS.
 
 ---
 
+PHASE 10
+
+Voice Announcement + Match History
+
+Plan:
+
+docs/superpowers/plans/2026-05-31-voice-announcement-match-history.md
+
+Features:
+
+- Voice announcement when a court is filled.
+- Block repeated partners.
+- Block repeated opponents.
+- Reset match history for a new session.
+
+---
+
 END

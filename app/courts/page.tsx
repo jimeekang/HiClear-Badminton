@@ -4,7 +4,10 @@ import { usePlayers, useQueue, useCourts } from "@/hooks/useFirestore";
 import CourtCard from "@/components/CourtCard";
 import { addCourt, resetAllPartnerIds } from "@/lib/db";
 import { assignPlayerToCourt } from "@/lib/courtOps";
-import { Player, QueueEntry } from "@/types";
+import { getCourtAnnouncement, getCourtsAnnouncement } from "@/lib/courtAnnouncement";
+import { canJoinTeam, checkAssignmentConflict, getOpponentTeamIds, getTeamIds } from "@/lib/matchHistory";
+import { useCourtVoice } from "@/hooks/useCourtVoice";
+import { Court, Player, QueueEntry } from "@/types";
 import { AppSnapshot, captureSnapshot, restoreSnapshot, sendAllCourtsToQueue } from "@/lib/snapshot";
 import {
   DndContext, closestCenter, MouseSensor, TouchSensor, useSensor, useSensors, DragEndEvent,
@@ -132,6 +135,8 @@ export default function CourtsPage() {
   const maleDraggingRef = useRef(false);
   const femaleDraggingRef = useRef(false);
 
+  const speakText = useCourtVoice();
+
   const courtSensors = useSensors(
     useSensor(MouseSensor, { activationConstraint: { distance: 5 } }),
     useSensor(TouchSensor, { activationConstraint: { delay: 150, tolerance: 5 } })
@@ -201,10 +206,10 @@ export default function CourtsPage() {
   };
 
   const handleResetPartners = async () => {
-    if (!confirm("모든 선수의 파트너 기록을 초기화하시겠습니까?\n(전체 게임 종료 후 새 세션 시작 시 사용)")) return;
+    if (!confirm("모든 선수의 매칭 기록을 초기화하시겠습니까?\n(전체 게임 종료 후 새 세션 시작 시 사용)")) return;
     try {
       await resetAllPartnerIds();
-      showToast("파트너 기록이 초기화되었습니다.");
+      showToast("매칭 기록이 초기화되었습니다.");
     } catch (e) {
       console.error(e);
       showToast("초기화 중 오류가 발생했습니다.");
@@ -220,6 +225,28 @@ export default function CourtsPage() {
   };
 
   const getPlayer = (id: string) => players.find((p) => p.id === id);
+
+  const speakAnnouncement = (text: string | null, emptyMessage: string) => {
+    if (!text) {
+      showToast(emptyMessage);
+      return;
+    }
+
+    if (!speakText(text)) {
+      showToast("이 브라우저는 음성 안내를 지원하지 않습니다.");
+      return;
+    }
+
+    showToast("음성 안내 중입니다.");
+  };
+
+  const handleAnnounceAllCourts = () => {
+    speakAnnouncement(getCourtsAnnouncement(localCourts, players), "안내할 완성 코트가 없습니다.");
+  };
+
+  const handleAnnounceCourt = (court: Court) => {
+    speakAnnouncement(getCourtAnnouncement(court, players), "양 팀 2명씩 배정된 코트만 안내할 수 있습니다.");
+  };
 
   // 코트에 이미 있는 선수는 대기열 패널에서 제외
   const courtPlayerIds = new Set(courts.flatMap((c) => [...c.teamA, ...c.teamB]));
@@ -290,14 +317,17 @@ export default function CourtsPage() {
 
         for (const gender of toFill) {
           const gq = gender === "M" ? localMaleQueue : localFemaleQueue;
-          const plannedIds = assignments.filter((a) => a.court.id === court.id).map((a) => a.playerId);
-          const courtSet = new Set([...court.teamA, ...court.teamB, ...plannedIds]);
+          const plannedSameTeamIds = assignments
+            .filter((a) => a.court.id === court.id && a.team === team)
+            .map((a) => a.playerId);
+          const plannedOpponentTeamIds = assignments
+            .filter((a) => a.court.id === court.id && a.team !== team)
+            .map((a) => a.playerId);
 
           for (const entry of gq) {
             if (usedIds.has(entry.playerId)) continue;
             const player = getPlayer(entry.playerId);
-            const conflict = (player?.lastPartnerIds ?? []).some((id) => courtSet.has(id));
-            if (!conflict) {
+            if (canJoinTeam(player, court, team, plannedSameTeamIds, plannedOpponentTeamIds)) {
               assignments.push({ court, team, playerId: entry.playerId, entryId: entry.id });
               usedIds.add(entry.playerId);
               break;
@@ -354,6 +384,12 @@ export default function CourtsPage() {
       return;
     }
 
+    const player = getPlayer(entry.playerId);
+    if (!canJoinTeam(player, court, pendingSlot.team)) {
+      showToast("이미 같은 편 또는 상대편으로 만난 선수입니다.");
+      return;
+    }
+
     saveSnapshot();
     await assignPlayerToCourt(court, pendingSlot.team, entry.playerId, entry.id);
 
@@ -364,13 +400,13 @@ export default function CourtsPage() {
   };
 
   const pendingCourt = courts.find((c) => c.id === pendingSlot?.courtId);
-  const courtPlayerSet = pendingCourt
-    ? new Set([...pendingCourt.teamA, ...pendingCourt.teamB])
-    : new Set<string>();
   const checkRecentMatch = (entry: QueueEntry) => {
-    if (!pendingSlot) return false;
-    const p = getPlayer(entry.playerId);
-    return (p?.lastPartnerIds ?? []).some((id) => courtPlayerSet.has(id));
+    if (!pendingSlot || !pendingCourt) return false;
+    return checkAssignmentConflict(
+      getPlayer(entry.playerId),
+      getTeamIds(pendingCourt, pendingSlot.team),
+      getOpponentTeamIds(pendingCourt, pendingSlot.team)
+    ) !== null;
   };
 
   // 팀이 Firestore 업데이트로 2명이 됐으면 자동으로 패널 닫기
@@ -411,6 +447,13 @@ export default function CourtsPage() {
             {autoFillLoading ? "배정 중..." : "자동 넣기"}
           </button>
           <button
+            onClick={handleAnnounceAllCourts}
+            className="px-3 rounded-lg font-bold text-base border border-gray-300 bg-white hover:bg-gray-100 transition-colors text-gray-700"
+            style={{ height: 40 }}
+          >
+            전체 음성안내
+          </button>
+          <button
             onClick={handleSendAllToQueue}
             className="bg-blue-700 text-white px-4 rounded-lg font-bold text-base hover:bg-blue-800 transition-colors"
             style={{ height: 40 }}
@@ -437,11 +480,11 @@ export default function CourtsPage() {
           </button>
           <button
             onClick={handleResetPartners}
-            title="전체 게임 종료 후 파트너 기록 초기화"
+            title="전체 게임 종료 후 매칭 기록 초기화"
             className="px-3 rounded-lg font-bold text-base border border-orange-300 bg-white hover:bg-orange-50 transition-colors text-orange-500"
             style={{ height: 40 }}
           >
-            파트너 초기화
+            매칭 초기화
           </button>
         </div>
 
@@ -504,6 +547,7 @@ export default function CourtsPage() {
                     isActive={activeCourtId === court.id}
                     onBeforeAction={saveSnapshot}
                     onActivate={() => setActiveCourtId(court.id)}
+                    onAnnounce={() => handleAnnounceCourt(court)}
                   />
                 ))}
               </div>

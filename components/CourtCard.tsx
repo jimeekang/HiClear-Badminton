@@ -96,9 +96,10 @@ interface Props {
   dragHandle?: React.ReactNode;
   onBeforeAction?: () => void;
   onActivate?: () => void;
+  onAnnounce?: () => void;
 }
 
-export default function CourtCard({ court, players, queue, onSlotClick, isActive, dragHandle, onBeforeAction }: Props) {
+export default function CourtCard({ court, players, queue, onSlotClick, isActive, dragHandle, onBeforeAction, onAnnounce }: Props) {
   const [processing, setProcessing] = useState(false);
   const [editingName, setEditingName] = useState(false);
   const [nameInput, setNameInput] = useState(court.name);
@@ -158,6 +159,10 @@ export default function CourtCard({ court, players, queue, onSlotClick, isActive
   };
 
   const isReady = court.teamA.length === 2 && court.teamB.length === 2;
+  const handleAnnounce = (e: React.MouseEvent<HTMLButtonElement>) => {
+    e.stopPropagation();
+    onAnnounce?.();
+  };
 
   return (
     <div className={`bg-white rounded-xl shadow-md overflow-hidden border-2 transition-all ${isActive ? "border-orange-400 ring-4 ring-orange-300 ring-offset-2 shadow-orange-200 shadow-lg" : "border-gray-200"} ${processing ? "opacity-70" : ""}`}>
@@ -174,13 +179,23 @@ export default function CourtCard({ court, players, queue, onSlotClick, isActive
             className="flex-1 bg-white/20 text-white font-bold text-lg rounded px-1 outline-none border border-white/50 min-w-0"
           />
         ) : (
-          <button
-            onClick={() => { setNameInput(court.name); setEditingName(true); }}
-            title="탭하여 이름 변경"
-            className="flex-1 text-lg font-bold text-left hover:text-yellow-300 transition-colors truncate"
-          >
-            {court.name}
-          </button>
+          <div className="flex-1 flex items-center gap-1 min-w-0">
+            <button
+              onClick={() => { setNameInput(court.name); setEditingName(true); }}
+              title="탭하여 이름 변경"
+              className="min-w-0 text-lg font-bold text-left hover:text-yellow-300 transition-colors truncate"
+            >
+              {court.name}
+            </button>
+            <button
+              onClick={handleAnnounce}
+              disabled={!isReady || processing}
+              title="이 코트 음성 안내"
+              className="text-white/90 text-xs px-2 py-1 border border-white/40 rounded hover:bg-white/20 disabled:opacity-40 transition-colors shrink-0"
+            >
+              음성
+            </button>
+          </div>
         )}
         <div className="flex items-center gap-1.5">
           <button

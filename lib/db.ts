@@ -20,6 +20,9 @@ export async function addPlayer(name: string, gender: "M" | "F"): Promise<string
     name,
     gender,
     gamesPlayed: 0,
+    lastPartnerIds: [],
+    partnerIds: [],
+    opponentIds: [],
   });
   return ref.id;
 }
@@ -90,6 +93,12 @@ export async function resetAllPartnerIds(): Promise<void> {
   const snap = await getDocs(collection(db, "players"));
   if (snap.empty) return;
   const batch = writeBatch(db);
-  snap.docs.forEach((d) => batch.update(d.ref, { lastPartnerIds: [] }));
+  snap.docs.forEach((d) =>
+    batch.update(d.ref, {
+      lastPartnerIds: [],
+      partnerIds: [],
+      opponentIds: [],
+    })
+  );
   await batch.commit();
 }

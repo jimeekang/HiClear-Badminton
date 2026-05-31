@@ -2,6 +2,7 @@
 import Link from "next/link";
 import Image from "next/image";
 import { usePathname } from "next/navigation";
+import InstallAppButton from "@/components/InstallAppButton";
 
 const links = [
   { href: "/courts", label: "코트" },
@@ -39,6 +40,7 @@ export default function NavBar() {
           </Link>
         );
       })}
+      <InstallAppButton />
     </nav>
   );
 }
