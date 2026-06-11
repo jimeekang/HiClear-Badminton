@@ -20,7 +20,7 @@ function normalizeLang(lang: string): string {
 
 function isKoreanVoice(voice: CourtSpeechVoice): boolean {
   const lang = normalizeLang(voice.lang);
-  return lang === "ko" || lang.startsWith("ko-") || KOREAN_NAME_PATTERN.test(voice.name);
+  return lang === "ko" || lang.startsWith("ko-");
 }
 
 function scoreVoice(voice: CourtSpeechVoice): number {

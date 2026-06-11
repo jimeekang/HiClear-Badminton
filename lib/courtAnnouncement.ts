@@ -46,7 +46,7 @@ export function getCourtAnnouncement(court: Court, players: Player[]): string | 
   const names = [...court.teamA, ...court.teamB].map((id) => getName(players, id));
   if (names.some((name) => name.length === 0)) return null;
 
-  return `${getCourtLabel(court.name)} ${names.join(", ")}`;
+  return `${getCourtLabel(court.name)}, ${names.join(", ")}`;
 }
 
 export function getCourtsAnnouncement(courts: Court[], players: Player[]): string | null {

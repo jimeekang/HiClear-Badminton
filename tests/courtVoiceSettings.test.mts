@@ -27,6 +27,15 @@ test("does not select a non-Korean voice", () => {
   assert.equal(selected, null);
 });
 
+test("does not select English voices that only mention Korea in the name", () => {
+  const selected = selectNaturalKoreanVoice([
+    voice("Microsoft Aria Online (Natural) - English (Korea)", "en-US", false),
+    voice("Google US English", "en-US", false),
+  ]);
+
+  assert.equal(selected, null);
+});
+
 test("uses slower court announcement speech settings", () => {
   const settings = getCourtVoiceSettings([
     voice("Microsoft SunHi Online (Natural) - Korean", "ko-KR", false),

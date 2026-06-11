@@ -17,7 +17,7 @@ test("builds one court announcement", () => {
     players
   );
 
-  assert.equal(text, "십오번 코트 준호, 재아, 윤철, 혜지");
+  assert.equal(text, "십오번 코트, 준호, 재아, 윤철, 혜지");
 });
 
 test("builds all ready court announcements and skips incomplete courts", () => {
@@ -29,7 +29,7 @@ test("builds all ready court announcements and skips incomplete courts", () => {
     players
   );
 
-  assert.equal(text, "전체 코트 안내입니다. 십오번 코트 준호, 재아, 윤철, 혜지");
+  assert.equal(text, "전체 코트 안내입니다. 십오번 코트, 준호, 재아, 윤철, 혜지");
 });
 
 test("uses the edited numeric court name when announcing", () => {
@@ -38,7 +38,7 @@ test("uses the edited numeric court name when announcing", () => {
     players
   );
 
-  assert.equal(text, "이십사번 코트 준호, 재아, 윤철, 혜지");
+  assert.equal(text, "이십사번 코트, 준호, 재아, 윤철, 혜지");
 });
 
 test("uses the edited text court name when announcing", () => {
@@ -47,7 +47,7 @@ test("uses the edited text court name when announcing", () => {
     players
   );
 
-  assert.equal(text, "메인 코트 준호, 재아, 윤철, 혜지");
+  assert.equal(text, "메인 코트, 준호, 재아, 윤철, 혜지");
 });
 
 test("pronounces VIP1 and VIP2 in English", () => {
@@ -60,6 +60,6 @@ test("pronounces VIP1 and VIP2 in English", () => {
     players
   );
 
-  assert.equal(vip1, "VIP one 코트 준호, 재아, 윤철, 혜지");
-  assert.equal(text, "VIP two 코트 준호, 재아, 윤철, 혜지");
+  assert.equal(vip1, "VIP one 코트, 준호, 재아, 윤철, 혜지");
+  assert.equal(text, "VIP two 코트, 준호, 재아, 윤철, 혜지");
 });
