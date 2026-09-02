@@ -2,6 +2,7 @@
 import { useState } from "react";
 import { Player } from "@/types";
 import { addPlayer } from "@/lib/db";
+import { runFirestoreSessionMutation } from "@/lib/firestoreSessionReset";
 
 interface Props {
   players: Player[];
@@ -14,8 +15,10 @@ export default function PlayerList({ players }: Props) {
 
   const handleAdd = async () => {
     if (!name.trim()) return;
+    const request = runFirestoreSessionMutation(() => addPlayer(name.trim(), gender));
+    if (!request) return;
     setLoading(true);
-    await addPlayer(name.trim(), gender);
+    await request;
     setName("");
     setLoading(false);
   };

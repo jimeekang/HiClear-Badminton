@@ -1,10 +1,12 @@
 "use client";
 import { useState } from "react";
-import { doc, writeBatch } from "firebase/firestore";
-import { db } from "@/lib/firebase";
 import { usePlayers, useQueue, useCourts } from "@/hooks/useFirestore";
 import QueueList from "@/components/QueueList";
-import { removePlayersFromQueue, pushTeamToQueue } from "@/lib/queue";
+import {
+  removePlayersFromQueue,
+  pushTeamToQueue,
+  reorderQueueEntries,
+} from "@/lib/queue";
 import { QueueEntry } from "@/types";
 
 export default function QueuePage() {
@@ -24,9 +26,11 @@ export default function QueuePage() {
 
   const handleAddAll = async () => {
     if (notInQueue.length === 0) return;
+    const request = pushTeamToQueue(notInQueue.map((p) => p.id));
+    if (!request) return;
     setAddingAll(true);
     try {
-      await pushTeamToQueue(notInQueue.map((p) => p.id));
+      await request;
     } finally {
       setAddingAll(false);
     }
@@ -36,18 +40,25 @@ export default function QueuePage() {
   const femaleQueue = queue.filter((e) => getPlayer(e.playerId)?.gender === "F");
 
   // 특정 성별 재정렬 시: 해당 성별 슬롯을 새 순서로 교체, 다른 성별은 유지
-  const handleReorder = async (gender: "M" | "F", reorderedGender: QueueEntry[]) => {
+  const handleReorder = async (
+    gender: "M" | "F",
+    reorderedGender: QueueEntry[]
+  ): Promise<boolean> => {
     let gIdx = 0;
     const merged = queue.map((entry) => {
       const p = getPlayer(entry.playerId);
       return p?.gender === gender ? reorderedGender[gIdx++] : entry;
     });
 
-    const batch = writeBatch(db);
-    merged.forEach((entry, idx) => {
-      batch.update(doc(db, "queue", entry.id), { position: idx + 1 });
-    });
-    await batch.commit();
+    const request = reorderQueueEntries(merged);
+    if (!request) return false;
+    try {
+      await request;
+      return true;
+    } catch (error) {
+      console.error(error);
+      return false;
+    }
   };
 
   return (

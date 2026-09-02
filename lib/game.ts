@@ -1,5 +1,7 @@
 import { doc, collection, writeBatch, increment, serverTimestamp, arrayUnion } from "firebase/firestore";
 import { db } from "./firebase";
+import { runFirestoreSessionMutationWithScope } from "./firestoreSessionReset";
+import type { SessionMutationScope } from "./sessionReset";
 import { Court, QueueEntry } from "@/types";
 
 /**
@@ -7,7 +9,18 @@ import { Court, QueueEntry } from "@/types";
  * - 일반: leaver → queue, stayer 잔류(streak++)
  * - 2연속: stayer → queue, leaver 코트 잔류(streak=1)
  */
-export async function processGameResult(
+export function processGameResult(
+  court: Court,
+  leaver: "A" | "B",
+  queue: QueueEntry[],
+  scope?: SessionMutationScope
+): Promise<void> | null {
+  return runFirestoreSessionMutationWithScope(scope, () =>
+    processGameResultWrite(court, leaver, queue)
+  );
+}
+
+async function processGameResultWrite(
   court: Court,
   leaver: "A" | "B",
   _queue: QueueEntry[]

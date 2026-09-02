@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "next dev -p 3000",
     "pwa:icons": "node scripts/generate-pwa-icons.mjs",
-    "test": "node --disable-warning=ExperimentalWarning --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --test tests/matchHistory.test.mts tests/metadata.test.mts tests/courtAnnouncement.test.mts tests/courtVoice.test.mts tests/courtVoiceSettings.test.mts tests/firebaseConfig.test.mts tests/pwaConfig.test.mts",
+    "test": "node --disable-warning=ExperimentalWarning --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --test tests/matchHistory.test.mts tests/sessionReset.test.mts tests/metadata.test.mts tests/courtAnnouncement.test.mts tests/courtVoice.test.mts tests/courtVoiceSettings.test.mts tests/firebaseConfig.test.mts tests/pwaConfig.test.mts tests/serviceWorker.regression-1.test.mts tests/dndSessionReset.regression-1.test.mts",
     "build": "next build",
     "start": "next start"
   },
@@ -23,6 +23,8 @@
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "@types/react-test-renderer": "^19.1.0",
+    "react-test-renderer": "^19.2.3",
     "sharp": "^0.34.5",
     "tailwindcss": "^4",
     "typescript": "^5"

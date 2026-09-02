@@ -1,25 +1,44 @@
 "use client";
-import React, { useState, useEffect, useCallback, useRef } from "react";
+import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { usePlayers, useQueue, useCourts } from "@/hooks/useFirestore";
 import CourtCard from "@/components/CourtCard";
+import SessionSortableDnd from "@/components/SessionSortableDnd";
 import { addCourt, resetAllPartnerIds } from "@/lib/db";
-import { assignPlayerToCourt } from "@/lib/courtOps";
+import { assignPlayerToCourt, reorderCourts } from "@/lib/courtOps";
+import { reorderQueueEntries } from "@/lib/queue";
+import {
+  resetFirestoreSession,
+  runFirestoreSessionMutation,
+  runFirestoreSessionMutationWithScope,
+} from "@/lib/firestoreSessionReset";
+import {
+  hasSessionStateToReset,
+  runConfirmedSessionReset,
+  type SessionMutationScope,
+} from "@/lib/sessionReset";
 import { getCourtAnnouncement, getCourtsAnnouncement } from "@/lib/courtAnnouncement";
-import { canJoinTeam, checkAssignmentConflict, getOpponentTeamIds, getTeamIds } from "@/lib/matchHistory";
+import {
+  canJoinTeam,
+  finishGameResult,
+  finishMatchHistoryReset,
+  getPartnerResetReason,
+  planAutoFill,
+  runMatchHistoryResetSingleFlight,
+  tryBeginGameResult,
+  tryBeginMatchHistoryReset,
+} from "@/lib/matchHistory";
 import { useCourtVoice } from "@/hooks/useCourtVoice";
 import { Court, Player, QueueEntry } from "@/types";
 import { AppSnapshot, captureSnapshot, restoreSnapshot, sendAllCourtsToQueue } from "@/lib/snapshot";
 import {
-  DndContext, closestCenter, MouseSensor, TouchSensor, useSensor, useSensors, DragEndEvent,
+  closestCenter, MouseSensor, TouchSensor, useSensor, useSensors, DragEndEvent,
 } from "@dnd-kit/core";
 import {
-  SortableContext, verticalListSortingStrategy, rectSortingStrategy, useSortable, arrayMove,
+  verticalListSortingStrategy, rectSortingStrategy, useSortable, arrayMove,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { writeBatch, doc } from "firebase/firestore";
-import { db } from "@/lib/firebase";
 
-function CourtQueueItem({ entry, index, genderIndex, player, gender, onClick, active, hasRecentMatch }: {
+function CourtQueueItem({ entry, index, genderIndex, player, gender, onClick, active, assignmentDisabled }: {
   entry: QueueEntry;
   index: number;
   genderIndex: number;
@@ -27,10 +46,10 @@ function CourtQueueItem({ entry, index, genderIndex, player, gender, onClick, ac
   gender: "M" | "F";
   onClick: () => void;
   active: boolean;
-  hasRecentMatch?: boolean;
+  assignmentDisabled?: boolean;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: entry.id });
-  const isDisabled = hasRecentMatch;
+  const isDisabled = assignmentDisabled;
   const isNext = !active && genderIndex === 0;
 
   const bgClass = isDisabled
@@ -50,14 +69,14 @@ function CourtQueueItem({ entry, index, genderIndex, player, gender, onClick, ac
   return (
     <div
       ref={setNodeRef}
-      style={{ transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.5 : 1, height: isNext ? 44 : 40 }}
+      style={{ transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.5 : 1, height: 44 }}
       onClick={active && !isDisabled ? onClick : undefined}
-      className={`flex items-center gap-1 rounded-lg transition-all ${bgClass}`}
+      className={`flex items-center rounded-lg transition-all ${bgClass}`}
     >
       <div
         {...attributes}
         {...listeners}
-        className="flex items-center justify-center px-1.5 text-gray-300 cursor-grab active:cursor-grabbing select-none h-full"
+        className="flex h-11 w-11 shrink-0 items-center gap-2.5 pl-1.5 pr-1 text-gray-300 cursor-grab active:cursor-grabbing select-none"
         style={{ touchAction: "none" }}
         onClick={(e) => e.stopPropagation()}
       >
@@ -66,8 +85,8 @@ function CourtQueueItem({ entry, index, genderIndex, player, gender, onClick, ac
           <circle cx="5" cy="12" r="2" /><circle cx="11" cy="12" r="2" />
           <circle cx="5" cy="18" r="2" /><circle cx="11" cy="18" r="2" />
         </svg>
+        <span className={`w-4 shrink-0 text-xs font-bold ${isNext ? "text-gray-600" : "text-gray-400"}`}>{index + 1}</span>
       </div>
-      <span className={`font-bold w-4 text-xs shrink-0 ${isNext ? "text-gray-600" : "text-gray-400"}`}>{index + 1}</span>
       <span className={`flex-1 text-xs truncate ${isNext ? "font-bold text-gray-800" : "font-semibold"}`}>{player?.name ?? "..."}</span>
     </div>
   );
@@ -93,7 +112,7 @@ function SortableCourtCard(props: React.ComponentProps<typeof CourtCard>) {
           <div
             {...attributes}
             {...listeners}
-            className="flex items-center justify-center w-5 text-gray-400 hover:text-gray-200 cursor-grab active:cursor-grabbing select-none shrink-0"
+            className="flex h-11 w-11 shrink-0 items-center justify-center text-gray-400 hover:text-gray-200 cursor-grab active:cursor-grabbing select-none"
             style={{ touchAction: "none" }}
           >
             <svg width="10" height="16" viewBox="0 0 16 24" fill="currentColor">
@@ -120,6 +139,9 @@ export default function CourtsPage() {
   };
 
   const [autoFillLoading, setAutoFillLoading] = useState(false);
+  const [matchHistoryResetLoading, setMatchHistoryResetLoading] = useState(false);
+  const [gameResultProcessingCount, setGameResultProcessingCount] = useState(0);
+  const [resettingSession, setResettingSession] = useState(false);
   const [showAddForm, setShowAddForm] = useState(false);
   const [courtNumber, setCourtNumber] = useState("");
   const [pendingSlot, setPendingSlot] = useState<PendingSlot | null>(null);
@@ -134,6 +156,11 @@ export default function CourtsPage() {
   const [localFemaleQueue, setLocalFemaleQueue] = useState<QueueEntry[]>([]);
   const maleDraggingRef = useRef(false);
   const femaleDraggingRef = useRef(false);
+  const autoResetKeyRef = useRef<string | null>(null);
+  const matchHistoryResetStateRef = useRef({ current: null as Promise<void> | null });
+  const matchHistoryOperationGateRef = useRef({ resetRequests: 0, activeGameResults: 0 });
+  const fullSessionResetStateRef = useRef({ current: null as Promise<void> | null });
+  const canResetSession = hasSessionStateToReset(queue, courts, players);
 
   const speakText = useCourtVoice();
 
@@ -161,16 +188,15 @@ export default function CourtsPage() {
   const handleCourtDragEnd = async (event: DragEndEvent) => {
     const { active, over } = event;
     courtDraggingRef.current = false;
+    if (resettingSession) return;
     if (!over || active.id === over.id) return;
     const oldIdx = localCourts.findIndex((c) => c.id === active.id);
     const newIdx = localCourts.findIndex((c) => c.id === over.id);
     const reordered = arrayMove(localCourts, oldIdx, newIdx);
+    const request = reorderCourts(reordered);
+    if (!request) return;
+    await request;
     setLocalCourts(reordered);
-    const batch = writeBatch(db);
-    reordered.forEach((court, idx) => {
-      batch.update(doc(db, "courts", court.id), { order: idx });
-    });
-    await batch.commit();
   };
 
   const queueSensors = useSensors(
@@ -179,36 +205,94 @@ export default function CourtsPage() {
   );
 
   const saveSnapshot = useCallback(() => {
-    setHistory((prev) => [...prev.slice(-9), captureSnapshot(courts, queue)]);
+    setHistory((prev) => [...prev.slice(-9), captureSnapshot(courts, queue, players)]);
     setFuture([]);
-  }, [courts, queue]);
+  }, [courts, queue, players]);
+
+  const runMatchHistoryReset = useCallback(async (
+    beforeReset?: () => void,
+    scope?: SessionMutationScope
+  ) => {
+    const gate = matchHistoryOperationGateRef.current;
+    if (!tryBeginMatchHistoryReset(gate)) return false;
+
+    setMatchHistoryResetLoading(true);
+    try {
+      let mutationAccepted = Boolean(matchHistoryResetStateRef.current.current);
+      await runMatchHistoryResetSingleFlight(
+        matchHistoryResetStateRef.current,
+        async () => {
+          const request = runFirestoreSessionMutationWithScope(scope, async () => {
+            beforeReset?.();
+            await resetAllPartnerIds();
+          });
+          if (!request) return;
+          mutationAccepted = true;
+          await request;
+        }
+      );
+      return mutationAccepted;
+    } finally {
+      finishMatchHistoryReset(gate);
+      if (gate.resetRequests === 0) {
+        setMatchHistoryResetLoading(false);
+      }
+    }
+  }, []);
+
+  const handleGameResultStart = useCallback(() => {
+    if (resettingSession) return false;
+    const gate = matchHistoryOperationGateRef.current;
+    if (!tryBeginGameResult(gate)) return false;
+    setGameResultProcessingCount(gate.activeGameResults);
+    return true;
+  }, [resettingSession]);
+
+  const handleGameResultEnd = useCallback(() => {
+    const gate = matchHistoryOperationGateRef.current;
+    finishGameResult(gate);
+    setGameResultProcessingCount(gate.activeGameResults);
+  }, []);
 
   const handleUndo = async () => {
-    if (history.length === 0 || undoLoading) return;
-    setUndoLoading(true);
+    if (resettingSession || history.length === 0 || undoLoading || matchHistoryResetLoading || gameResultProcessingCount > 0) return;
     const prev = history[history.length - 1];
-    const current = captureSnapshot(courts, queue);
+    const current = captureSnapshot(courts, queue, players);
+    const request = restoreSnapshot(prev, courts);
+    if (!request) return;
+    setUndoLoading(true);
     setHistory((h) => h.slice(0, -1));
     setFuture((f) => [current, ...f.slice(0, 9)]);
-    try { await restoreSnapshot(prev, courts); } catch (e) { alert("되돌리기 실패"); }
+    try { await request; } catch (e) { alert("되돌리기 실패"); }
     setUndoLoading(false);
   };
 
   const handleRedo = async () => {
-    if (future.length === 0 || undoLoading) return;
-    setUndoLoading(true);
+    if (resettingSession || future.length === 0 || undoLoading || matchHistoryResetLoading || gameResultProcessingCount > 0) return;
     const next = future[0];
-    const current = captureSnapshot(courts, queue);
+    const current = captureSnapshot(courts, queue, players);
+    const request = restoreSnapshot(next, courts);
+    if (!request) return;
+    setUndoLoading(true);
     setFuture((f) => f.slice(1));
     setHistory((h) => [...h.slice(-9), current]);
-    try { await restoreSnapshot(next, courts); } catch (e) { alert("다시실행 실패"); }
+    try { await request; } catch (e) { alert("다시실행 실패"); }
     setUndoLoading(false);
   };
 
   const handleResetPartners = async () => {
-    if (!confirm("모든 선수의 매칭 기록을 초기화하시겠습니까?\n(전체 게임 종료 후 새 세션 시작 시 사용)")) return;
+    if (
+      resettingSession ||
+      matchHistoryResetLoading ||
+      gameResultProcessingCount > 0 ||
+      !confirm("모든 선수의 매칭 기록을 초기화하시겠습니까?\n(전체 게임 종료 후 새 세션 시작 시 사용)")
+    ) return;
     try {
-      await resetAllPartnerIds();
+      const resetStarted = await runMatchHistoryReset(saveSnapshot);
+      if (!resetStarted) {
+        showToast("경기 결과 처리 후 다시 시도해 주세요.");
+        return;
+      }
       showToast("매칭 기록이 초기화되었습니다.");
     } catch (e) {
       console.error(e);
@@ -216,12 +300,47 @@ export default function CourtsPage() {
     }
   };
 
+  const handleResetSession = async () => {
+    const request = runConfirmedSessionReset(
+      fullSessionResetStateRef.current,
+      canResetSession,
+      () => confirm(
+        "대기열과 모든 코트의 선수 배치, 모든 선수의 매칭 기록을 초기화하시겠습니까?\n선수 등록 정보와 코트는 유지됩니다."
+      ),
+      resetFirestoreSession,
+      () => {
+        setHistory([]);
+        setFuture([]);
+        setPendingSlot(null);
+        setActiveCourtId(null);
+        setShowAddForm(false);
+        setCourtNumber("");
+        autoResetKeyRef.current = null;
+      }
+    );
+    if (!request) return;
+
+    setResettingSession(true);
+    try {
+      await request;
+      alert("대기열, 코트 배치, 매칭 기록을 모두 초기화했습니다.");
+    } catch (error) {
+      console.error("전체 초기화 실패:", error);
+      alert("전체 초기화에 실패했습니다. 연결을 확인하고 다시 시도해 주세요.");
+    } finally {
+      setResettingSession(false);
+    }
+  };
+
   const handleSendAllToQueue = async () => {
+    if (resettingSession) return;
     const total = courts.reduce((n, c) => n + c.teamA.length + c.teamB.length, 0);
     if (total === 0) { alert("코트에 선수가 없습니다."); return; }
     if (!confirm(`모든 코트의 선수 ${total}명을 대기열로 보내시겠습니까?`)) return;
+    const request = sendAllCourtsToQueue(courts);
+    if (!request) return;
     saveSnapshot();
-    try { await sendAllCourtsToQueue(courts); } catch (e) { alert("오류가 발생했습니다."); }
+    try { await request; } catch (e) { alert("오류가 발생했습니다."); }
   };
 
   const getPlayer = (id: string) => players.find((p) => p.id === id);
@@ -249,8 +368,10 @@ export default function CourtsPage() {
   };
 
   // 코트에 이미 있는 선수는 대기열 패널에서 제외
-  const courtPlayerIds = new Set(courts.flatMap((c) => [...c.teamA, ...c.teamB]));
-  const availableQueue = queue.filter((e) => !courtPlayerIds.has(e.playerId));
+  const availableQueue = useMemo(() => {
+    const courtPlayerIds = new Set(courts.flatMap((court) => [...court.teamA, ...court.teamB]));
+    return queue.filter((entry) => !courtPlayerIds.has(entry.playerId));
+  }, [courts, queue]);
 
   useEffect(() => {
     if (!maleDraggingRef.current) {
@@ -274,6 +395,7 @@ export default function CourtsPage() {
     const { active, over } = event;
     const isM = gender === "M";
     (isM ? maleDraggingRef : femaleDraggingRef).current = false;
+    if (resettingSession) return;
     if (!over || active.id === over.id) return;
 
     const localQ = isM ? localMaleQueue : localFemaleQueue;
@@ -281,89 +403,107 @@ export default function CourtsPage() {
     const oldIdx = localQ.findIndex(e => e.id === active.id);
     const newIdx = localQ.findIndex(e => e.id === over.id);
     const reordered = arrayMove(localQ, oldIdx, newIdx);
-    setLocalQ(reordered);
 
     let gIdx = 0;
     const merged = availableQueue.map(entry => {
       const p = players.find(p => p.id === entry.playerId);
       return p?.gender === gender ? reordered[gIdx++] : entry;
     });
-    const batch = writeBatch(db);
-    merged.forEach((entry, idx) => {
-      batch.update(doc(db, "queue", entry.id), { position: idx + 1 });
-    });
-    await batch.commit();
+    const request = reorderQueueEntries(merged);
+    if (!request) return;
+    await request;
+    setLocalQ(reordered);
   };
 
   const handleAutoFill = async () => {
+    if (resettingSession || autoFillLoading || matchHistoryResetLoading || gameResultProcessingCount > 0) return;
     const emptyCourts = localCourts.filter((c) => c.teamA.length < 2 || c.teamB.length < 2);
     if (emptyCourts.length === 0) { showToast("빈 슬롯이 있는 코트가 없습니다."); return; }
 
-    const usedIds = new Set<string>();
-    const assignments: { court: typeof courts[0]; team: "A" | "B"; playerId: string; entryId: string }[] = [];
-    let totalSlots = 0;
-
-    for (const court of emptyCourts) {
-      for (const team of ["A", "B"] as const) {
-        const teamPlayers = team === "A" ? court.teamA : court.teamB;
-        if (teamPlayers.length >= 2) continue;
-
-        const emptyCount = 2 - teamPlayers.length;
-        const existingGenders = teamPlayers.map((id) => getPlayer(id)?.gender);
-        const toFill: ("M" | "F")[] =
-          emptyCount === 2 ? ["M", "F"] : [existingGenders.includes("M") ? "F" : "M"];
-
-        totalSlots += toFill.length;
-
-        for (const gender of toFill) {
-          const gq = gender === "M" ? localMaleQueue : localFemaleQueue;
-          const plannedSameTeamIds = assignments
-            .filter((a) => a.court.id === court.id && a.team === team)
-            .map((a) => a.playerId);
-          const plannedOpponentTeamIds = assignments
-            .filter((a) => a.court.id === court.id && a.team !== team)
-            .map((a) => a.playerId);
-
-          for (const entry of gq) {
-            if (usedIds.has(entry.playerId)) continue;
-            const player = getPlayer(entry.playerId);
-            if (canJoinTeam(player, court, team, plannedSameTeamIds, plannedOpponentTeamIds)) {
-              assignments.push({ court, team, playerId: entry.playerId, entryId: entry.id });
-              usedIds.add(entry.playerId);
-              break;
-            }
-          }
-        }
-      }
+    const autoFillQueue = {
+      M: localMaleQueue.map(({ id, playerId }) => ({ id, playerId })),
+      F: localFemaleQueue.map(({ id, playerId }) => ({ id, playerId })),
+    };
+    let plan = planAutoFill(emptyCourts, autoFillQueue, players);
+    if (plan.assignments.length === 0 && !plan.needsHistoryReset) {
+      showToast("배정 가능한 선수가 없습니다.");
+      return;
     }
 
-    if (assignments.length === 0) { showToast("배정 가능한 선수가 없습니다."); return; }
+    const request = runFirestoreSessionMutation(async (scope) => {
+      let historyReset = false;
+      let snapshotSaved = false;
 
-    saveSnapshot();
+      if (plan.needsHistoryReset) {
+        const resetStarted = await runMatchHistoryReset(saveSnapshot, scope);
+        if (!resetStarted) {
+          showToast("경기 결과 처리 후 자동 배정을 다시 시도해 주세요.");
+          return;
+        }
+        snapshotSaved = true;
+        historyReset = true;
+        const clearedPlayers = players.map((player) => ({
+          ...player,
+          lastPartnerIds: [],
+          partnerIds: [],
+          opponentIds: [],
+        }));
+        plan = planAutoFill(emptyCourts, autoFillQueue, clearedPlayers);
+      }
+
+      if (plan.assignments.length === 0) {
+        showToast("필요한 성별 선수가 없어 매칭 기록을 자동 초기화했습니다.");
+        return;
+      }
+
+      if (!snapshotSaved) saveSnapshot();
+      for (const assignment of plan.assignments) {
+        const court = emptyCourts.find((candidate) => candidate.id === assignment.courtId);
+        if (!court) continue;
+        await assignPlayerToCourt(
+          court,
+          assignment.team,
+          assignment.playerId,
+          assignment.entryId,
+          scope
+        );
+      }
+      const skipped = plan.totalSlots - plan.assignments.length;
+      const resetNotice = historyReset ? " · 매칭 기록 자동 초기화" : "";
+      showToast(
+        skipped > 0
+          ? plan.needsHistoryReset
+            ? `${plan.assignments.length}명 배정 완료 (필요한 성별 선수 부족으로 ${skipped}개 슬롯 미배정)${resetNotice}`
+            : `${plan.assignments.length}명 배정 완료 (${skipped}개 슬롯 미배정)${resetNotice}`
+          : `${plan.assignments.length}명 자동 배정 완료${resetNotice}`
+      );
+    });
+    if (!request) return;
+
     setAutoFillLoading(true);
     try {
-      for (const a of assignments) {
-        await assignPlayerToCourt(a.court, a.team, a.playerId, a.entryId);
-      }
-      const skipped = totalSlots - assignments.length;
-      showToast(skipped > 0
-        ? `${assignments.length}명 배정 완료 (${skipped}개 슬롯 미배정)`
-        : `${assignments.length}명 자동 배정 완료`
-      );
+      await request;
+    } catch (error) {
+      console.error(error);
+      showToast("자동 배정 중 오류가 발생했습니다.");
     } finally {
       setAutoFillLoading(false);
     }
   };
 
   const handleAddCourt = async () => {
+    if (resettingSession) return;
     const name = courtNumber.trim();
     if (!name) return;
-    await addCourt(`코트 ${name}`);
+    const request = runFirestoreSessionMutation(() => addCourt(`코트 ${name}`));
+    if (!request) return;
+    await request;
     setCourtNumber("");
     setShowAddForm(false);
   };
 
   const handleSlotClick = (courtId: string, team: "A" | "B") => {
+    if (resettingSession) return;
     const court = courts.find((c) => c.id === courtId);
     if (!court) return;
     setActiveCourtId(courtId);
@@ -373,7 +513,7 @@ export default function CourtsPage() {
   };
 
   const handleAssign = async (entry: QueueEntry) => {
-    if (!pendingSlot) return;
+    if (resettingSession || !pendingSlot) return;
     const court = courts.find((c) => c.id === pendingSlot.courtId);
     if (!court) return;
 
@@ -385,13 +525,20 @@ export default function CourtsPage() {
     }
 
     const player = getPlayer(entry.playerId);
-    if (!canJoinTeam(player, court, pendingSlot.team)) {
-      showToast("이미 같은 편 또는 상대편으로 만난 선수입니다.");
+    if (!canJoinTeam(player, court, pendingSlot.team, players)) {
+      const currentPartner = currentTeam.length === 1 ? getPlayer(currentTeam[0]) : undefined;
+      showToast(
+        currentPartner?.gender === player?.gender
+          ? "반대 성별 선수만 파트너로 추가할 수 있습니다."
+          : "이미 같은 편 또는 상대편으로 만난 선수입니다."
+      );
       return;
     }
 
+    const request = assignPlayerToCourt(court, pendingSlot.team, entry.playerId, entry.id);
+    if (!request) return;
     saveSnapshot();
-    await assignPlayerToCourt(court, pendingSlot.team, entry.playerId, entry.id);
+    await request;
 
     // 배정 후 팀이 찼으면 패널 닫기
     if (currentTeam.length + 1 >= 2) {
@@ -400,23 +547,59 @@ export default function CourtsPage() {
   };
 
   const pendingCourt = courts.find((c) => c.id === pendingSlot?.courtId);
-  const checkRecentMatch = (entry: QueueEntry) => {
+  const isAssignmentDisabled = (entry: QueueEntry) => {
+    if (resettingSession) return true;
     if (!pendingSlot || !pendingCourt) return false;
-    return checkAssignmentConflict(
-      getPlayer(entry.playerId),
-      getTeamIds(pendingCourt, pendingSlot.team),
-      getOpponentTeamIds(pendingCourt, pendingSlot.team)
-    ) !== null;
+    return !canJoinTeam(getPlayer(entry.playerId), pendingCourt, pendingSlot.team, players);
   };
 
-  // 팀이 Firestore 업데이트로 2명이 됐으면 자동으로 패널 닫기
   useEffect(() => {
-    if (!pendingSlot || !pendingCourt) return;
+    if (!pendingSlot || !pendingCourt) {
+      autoResetKeyRef.current = null;
+      return;
+    }
+
     const teamPlayers = pendingSlot.team === "A" ? pendingCourt.teamA : pendingCourt.teamB;
     if (teamPlayers.length >= 2) {
       setPendingSlot(null);
+      return;
     }
-  }, [pendingCourt, pendingSlot]);
+
+    const candidates = availableQueue
+      .map((entry) => getPlayer(entry.playerId))
+      .filter((player): player is Player => Boolean(player));
+    const resetReason = getPartnerResetReason(
+      candidates,
+      pendingCourt,
+      pendingSlot.team,
+      players
+    );
+
+    if (!resetReason || resettingSession || gameResultProcessingCount > 0) return;
+
+    const resetKey = `${pendingSlot.courtId}:${pendingSlot.team}:${teamPlayers.join(",")}:${resetReason}`;
+    if (autoResetKeyRef.current === resetKey) return;
+    autoResetKeyRef.current = resetKey;
+
+    void (async () => {
+      try {
+        const resetStarted = await runMatchHistoryReset(saveSnapshot);
+        if (!resetStarted) {
+          autoResetKeyRef.current = null;
+          return;
+        }
+        showToast(
+          resetReason === "required-gender-missing"
+            ? "필요한 성별 선수가 없어 매칭 기록을 자동 초기화했습니다."
+            : "추가 가능한 선수가 없어 매칭 기록을 자동 초기화했습니다."
+        );
+      } catch (error) {
+        autoResetKeyRef.current = null;
+        console.error(error);
+        showToast("매칭 기록 자동 초기화 중 오류가 발생했습니다.");
+      }
+    })();
+  }, [pendingCourt, pendingSlot, availableQueue, players, saveSnapshot, runMatchHistoryReset, resettingSession, gameResultProcessingCount]);
 
   return (
     <div className="flex" style={{ height: "calc(100vh - 72px)" }} onClick={() => setActiveCourtId(null)}>
@@ -433,58 +616,70 @@ export default function CourtsPage() {
           <span className="text-lg text-gray-400">({courts.length}개)</span>
           <button
             onClick={() => { setShowAddForm((v) => !v); setCourtNumber(""); }}
+            disabled={resettingSession}
             className="bg-blue-500 text-white px-4 rounded-lg font-bold text-base hover:bg-blue-600 transition-colors ml-2"
-            style={{ height: 40 }}
+            style={{ height: 44 }}
           >
             + 코트 추가
           </button>
           <button
             onClick={handleAutoFill}
-            disabled={autoFillLoading}
+            disabled={resettingSession || autoFillLoading || matchHistoryResetLoading || gameResultProcessingCount > 0}
             className="bg-violet-500 text-white px-4 rounded-lg font-bold text-base hover:bg-violet-600 disabled:opacity-40 transition-colors"
-            style={{ height: 40 }}
+            style={{ height: 44 }}
           >
             {autoFillLoading ? "배정 중..." : "자동 넣기"}
           </button>
           <button
             onClick={handleAnnounceAllCourts}
             className="px-3 rounded-lg font-bold text-base border border-gray-300 bg-white hover:bg-gray-100 transition-colors text-gray-700"
-            style={{ height: 40 }}
+            style={{ height: 44 }}
           >
             전체 음성안내
           </button>
           <button
             onClick={handleSendAllToQueue}
-            className="bg-blue-700 text-white px-4 rounded-lg font-bold text-base hover:bg-blue-800 transition-colors"
-            style={{ height: 40 }}
+            disabled={resettingSession}
+            className="bg-blue-700 text-white px-4 rounded-lg font-bold text-base hover:bg-blue-800 disabled:opacity-40 transition-colors"
+            style={{ height: 44 }}
           >
             전체 대기열로
           </button>
           <button
             onClick={handleUndo}
-            disabled={history.length === 0 || undoLoading}
+            disabled={resettingSession || history.length === 0 || undoLoading || matchHistoryResetLoading || gameResultProcessingCount > 0}
             title="되돌리기"
             className="px-3 rounded-lg font-bold text-base border border-gray-300 bg-white hover:bg-gray-100 disabled:opacity-30 transition-colors text-gray-600"
-            style={{ height: 40 }}
+            style={{ height: 44 }}
           >
             ↩ 되돌리기
           </button>
           <button
             onClick={handleRedo}
-            disabled={future.length === 0 || undoLoading}
+            disabled={resettingSession || future.length === 0 || undoLoading || matchHistoryResetLoading || gameResultProcessingCount > 0}
             title="다시실행"
             className="px-3 rounded-lg font-bold text-base border border-gray-300 bg-white hover:bg-gray-100 disabled:opacity-30 transition-colors text-gray-600"
-            style={{ height: 40 }}
+            style={{ height: 44 }}
           >
             ↪ 다시실행
           </button>
           <button
             onClick={handleResetPartners}
+            disabled={resettingSession || matchHistoryResetLoading || gameResultProcessingCount > 0}
             title="전체 게임 종료 후 매칭 기록 초기화"
-            className="px-3 rounded-lg font-bold text-base border border-orange-300 bg-white hover:bg-orange-50 transition-colors text-orange-500"
-            style={{ height: 40 }}
+            className="px-3 rounded-lg font-bold text-base border border-orange-300 bg-white hover:bg-orange-50 disabled:opacity-30 transition-colors text-orange-500"
+            style={{ height: 44 }}
           >
-            매칭 초기화
+            {matchHistoryResetLoading ? "초기화 중..." : "매칭 초기화"}
+          </button>
+          <button
+            onClick={handleResetSession}
+            disabled={!canResetSession || resettingSession}
+            title="대기열, 코트 배치, 매칭 기록 전체 초기화"
+            className="px-3 rounded-lg font-bold text-base bg-red-500 text-white hover:bg-red-600 disabled:opacity-30 transition-colors"
+            style={{ height: 44 }}
+          >
+            {resettingSession ? "초기화 중..." : "전체 초기화"}
           </button>
         </div>
 
@@ -494,6 +689,7 @@ export default function CourtsPage() {
             <span className="text-base font-semibold text-gray-600 whitespace-nowrap">코트 번호:</span>
             <input
               type="text"
+              disabled={resettingSession}
               placeholder="예) 1, 2, A..."
               value={courtNumber}
               onChange={(e) => setCourtNumber(e.target.value)}
@@ -504,7 +700,7 @@ export default function CourtsPage() {
             />
             <button
               onClick={handleAddCourt}
-              disabled={!courtNumber.trim()}
+              disabled={resettingSession || !courtNumber.trim()}
               className="bg-blue-500 text-white px-4 rounded-lg text-base font-bold disabled:opacity-40 hover:bg-blue-600 transition-colors"
               style={{ height: 44 }}
             >
@@ -528,31 +724,39 @@ export default function CourtsPage() {
             <div className="text-xl mt-2">위의 버튼으로 코트를 추가하세요.</div>
           </div>
         ) : (
-          <DndContext
+          <SessionSortableDnd
             sensors={courtSensors}
+            disabled={resettingSession}
+            items={localCourts.map((c) => c.id)}
+            strategy={rectSortingStrategy}
             collisionDetection={closestCenter}
-            onDragStart={() => { courtDraggingRef.current = true; }}
+            onDragStart={() => { if (!resettingSession) courtDraggingRef.current = true; }}
             onDragEnd={handleCourtDragEnd}
             onDragCancel={() => { courtDraggingRef.current = false; }}
           >
-            <SortableContext items={localCourts.map((c) => c.id)} strategy={rectSortingStrategy}>
-              <div className="grid grid-cols-2 xl:grid-cols-4 gap-3">
-                {localCourts.map((court) => (
-                  <SortableCourtCard
-                    key={court.id}
-                    court={court}
-                    players={players}
-                    queue={queue}
-                    onSlotClick={handleSlotClick}
-                    isActive={activeCourtId === court.id}
-                    onBeforeAction={saveSnapshot}
-                    onActivate={() => setActiveCourtId(court.id)}
-                    onAnnounce={() => handleAnnounceCourt(court)}
-                  />
-                ))}
-              </div>
-            </SortableContext>
-          </DndContext>
+            <div
+              className="grid gap-3"
+              style={{ gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 20rem), 1fr))" }}
+            >
+              {localCourts.map((court) => (
+                <SortableCourtCard
+                  key={court.id}
+                  court={court}
+                  players={players}
+                  queue={queue}
+                  onSlotClick={handleSlotClick}
+                  isActive={activeCourtId === court.id}
+                  onBeforeAction={saveSnapshot}
+                  onActivate={() => setActiveCourtId(court.id)}
+                  onAnnounce={() => handleAnnounceCourt(court)}
+                  mutationDisabled={resettingSession}
+                  resultDisabled={resettingSession || matchHistoryResetLoading}
+                  onResultStart={handleGameResultStart}
+                  onResultEnd={handleGameResultEnd}
+                />
+              ))}
+            </div>
+          </SessionSortableDnd>
         )}
       </div>
 
@@ -612,39 +816,40 @@ export default function CourtsPage() {
                     <div className={`text-xs font-bold mb-1 px-0.5 ${isM ? "text-blue-500" : "text-pink-500"}`}>
                       {isM ? "남" : "여"} ({localQ.length})
                     </div>
-                    <DndContext
+                    <SessionSortableDnd
                       sensors={queueSensors}
+                      disabled={resettingSession}
+                      items={localQ.map((entry) => entry.id)}
+                      strategy={verticalListSortingStrategy}
                       collisionDetection={closestCenter}
-                      onDragStart={() => { draggingRef.current = true; }}
+                      onDragStart={() => { if (!resettingSession) draggingRef.current = true; }}
                       onDragEnd={(e) => handleQueueDragEnd(e, gender)}
                       onDragCancel={() => { draggingRef.current = false; }}
                     >
-                      <SortableContext items={localQ.map(e => e.id)} strategy={verticalListSortingStrategy}>
-                        <div className="space-y-1">
-                          {localQ.map((entry, genderIdx) => {
-                            const overallIdx = availableQueue.findIndex(e => e.id === entry.id);
-                            return (
-                              <CourtQueueItem
-                                key={entry.id}
-                                entry={entry}
-                                index={overallIdx}
-                                genderIndex={genderIdx}
-                                player={getPlayer(entry.playerId)}
-                                gender={gender}
-                                onClick={() => handleAssign(entry)}
-                                active={!!pendingSlot}
-                                hasRecentMatch={checkRecentMatch(entry)}
-                              />
-                            );
-                          })}
-                          {localQ.length === 0 && (
-                            <div className="text-center text-gray-400 py-3 text-xs rounded-lg bg-gray-50/80">
-                              없음
-                            </div>
-                          )}
-                        </div>
-                      </SortableContext>
-                    </DndContext>
+                      <div className="space-y-1">
+                        {localQ.map((entry, genderIdx) => {
+                          const overallIdx = availableQueue.findIndex(e => e.id === entry.id);
+                          return (
+                            <CourtQueueItem
+                              key={entry.id}
+                              entry={entry}
+                              index={overallIdx}
+                              genderIndex={genderIdx}
+                              player={getPlayer(entry.playerId)}
+                              gender={gender}
+                              onClick={() => handleAssign(entry)}
+                              active={!!pendingSlot && !resettingSession}
+                              assignmentDisabled={isAssignmentDisabled(entry)}
+                            />
+                          );
+                        })}
+                        {localQ.length === 0 && (
+                          <div className="text-center text-gray-400 py-3 text-xs rounded-lg bg-gray-50/80">
+                            없음
+                          </div>
+                        )}
+                      </div>
+                    </SessionSortableDnd>
                   </div>
                 );
               })}
@@ -688,14 +893,14 @@ export default function CourtsPage() {
                       {genderQueue.map((entry) => {
                         const overallIdx = availableQueue.findIndex((e) => e.id === entry.id);
                         const p = getPlayer(entry.playerId);
-                        const recentMatch = checkRecentMatch(entry);
+                        const assignmentDisabled = isAssignmentDisabled(entry);
                         return (
                           <button
                             key={entry.id}
                             onClick={() => handleAssign(entry)}
-                            disabled={recentMatch}
+                            disabled={assignmentDisabled}
                             className={`w-full flex items-center gap-3 border-2 rounded-xl px-3 transition-all ${
-                              recentMatch
+                              assignmentDisabled
                                 ? "bg-gray-100 border-gray-200 opacity-50 cursor-not-allowed"
                                 : gender === "M"
                                 ? "bg-blue-50 border-blue-300 hover:opacity-80 active:scale-95"

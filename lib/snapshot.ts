@@ -1,6 +1,9 @@
 import { collection, doc, writeBatch, getDocs, serverTimestamp } from "firebase/firestore";
 import { db } from "./firebase";
-import { Court, QueueEntry } from "@/types";
+import { capturePlayerMatchHistories, type PlayerMatchHistorySnapshot } from "./matchHistory";
+import { runFirestoreSessionMutationWithScope } from "./firestoreSessionReset";
+import type { SessionMutationScope } from "./sessionReset";
+import type { Court, Player, QueueEntry } from "@/types";
 
 export interface AppSnapshot {
   courts: Array<{
@@ -15,9 +18,14 @@ export interface AppSnapshot {
     playerId: string;
     position: number;
   }>;
+  playerMatchHistories: PlayerMatchHistorySnapshot[];
 }
 
-export function captureSnapshot(courts: Court[], queue: QueueEntry[]): AppSnapshot {
+export function captureSnapshot(
+  courts: Court[],
+  queue: QueueEntry[],
+  players: Player[]
+): AppSnapshot {
   return {
     courts: courts.map((c) => ({
       id: c.id,
@@ -28,10 +36,21 @@ export function captureSnapshot(courts: Court[], queue: QueueEntry[]): AppSnapsh
       gamesB: c.gamesB ?? 0,
     })),
     queue: queue.map((q) => ({ playerId: q.playerId, position: q.position })),
+    playerMatchHistories: capturePlayerMatchHistories(players),
   };
 }
 
-export async function restoreSnapshot(
+export function restoreSnapshot(
+  snapshot: AppSnapshot,
+  currentCourts: Court[],
+  scope?: SessionMutationScope
+): Promise<void> | null {
+  return runFirestoreSessionMutationWithScope(scope, () =>
+    restoreSnapshotWrite(snapshot, currentCourts)
+  );
+}
+
+async function restoreSnapshotWrite(
   snapshot: AppSnapshot,
   currentCourts: Court[]
 ): Promise<void> {
@@ -66,10 +85,27 @@ export async function restoreSnapshot(
     });
   });
 
+  snapshot.playerMatchHistories.forEach((history) => {
+    batch.update(doc(db, "players", history.id), {
+      lastPartnerIds: history.lastPartnerIds,
+      partnerIds: history.partnerIds,
+      opponentIds: history.opponentIds,
+    });
+  });
+
   await batch.commit();
 }
 
-export async function sendAllCourtsToQueue(courts: Court[]): Promise<void> {
+export function sendAllCourtsToQueue(
+  courts: Court[],
+  scope?: SessionMutationScope
+): Promise<void> | null {
+  return runFirestoreSessionMutationWithScope(scope, () =>
+    sendAllCourtsToQueueWrite(courts)
+  );
+}
+
+async function sendAllCourtsToQueueWrite(courts: Court[]): Promise<void> {
   const allPlayerIds = courts.flatMap((c) => [...c.teamA, ...c.teamB]);
   if (allPlayerIds.length === 0) return;
 

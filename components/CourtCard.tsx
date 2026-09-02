@@ -2,9 +2,13 @@
 import { useState, useRef, useEffect } from "react";
 import { Court, Player, QueueEntry } from "@/types";
 import { processGameResult } from "@/lib/game";
-import { deleteCourt, updateCourt } from "@/lib/db";
-import { pushTeamToQueue } from "@/lib/queue";
-import { removePlayerFromCourt, sendCourtPlayersToQueue } from "@/lib/courtOps";
+import { updateCourt } from "@/lib/db";
+import { runFirestoreSessionMutation } from "@/lib/firestoreSessionReset";
+import {
+  deleteCourtAndQueuePlayers,
+  removePlayerFromCourt,
+  sendCourtPlayersToQueue,
+} from "@/lib/courtOps";
 
 // ─── TeamHalf: 외부 컴포넌트 (CourtCard 렌더마다 unmount 방지) ───
 interface TeamHalfProps {
@@ -27,8 +31,10 @@ function TeamHalf({ court, team, ids, games, bgClass, labelClass, players, onSlo
     if (disabled) return;
     const p = getPlayer(pid);
     if (!confirm(`${p?.name ?? "선수"}를 코트에서 제거하고 대기열로 보내시겠습니까?`)) return;
+    const request = removePlayerFromCourt(court, team, pid);
+    if (!request) return;
     onBeforeAction?.();
-    removePlayerFromCourt(court, team, pid);
+    void request;
   };
 
   return (
@@ -97,9 +103,13 @@ interface Props {
   onBeforeAction?: () => void;
   onActivate?: () => void;
   onAnnounce?: () => void;
+  mutationDisabled?: boolean;
+  resultDisabled?: boolean;
+  onResultStart?: () => boolean;
+  onResultEnd?: () => void;
 }
 
-export default function CourtCard({ court, players, queue, onSlotClick, isActive, dragHandle, onBeforeAction, onAnnounce }: Props) {
+export default function CourtCard({ court, players, queue, onSlotClick, isActive, dragHandle, onBeforeAction, onAnnounce, mutationDisabled = false, resultDisabled, onResultStart, onResultEnd }: Props) {
   const [processing, setProcessing] = useState(false);
   const [editingName, setEditingName] = useState(false);
   const [nameInput, setNameInput] = useState(court.name);
@@ -114,30 +124,45 @@ export default function CourtCard({ court, players, queue, onSlotClick, isActive
   }, [court.name]);
 
   const handleNameSubmit = async () => {
+    if (mutationDisabled) {
+      setEditingName(false);
+      setNameInput(court.name);
+      return;
+    }
     const trimmed = nameInput.trim();
     setEditingName(false);
     if (!trimmed || trimmed === court.name) { setNameInput(court.name); return; }
-    await updateCourt(court.id, { name: trimmed });
+    const request = runFirestoreSessionMutation(() =>
+      updateCourt(court.id, { name: trimmed })
+    );
+    if (!request) {
+      setNameInput(court.name);
+      return;
+    }
+    await request;
   };
 
   const handleSendToQueue = async () => {
+    if (mutationDisabled) return;
     const count = court.teamA.length + court.teamB.length;
     if (count === 0) { alert("코트에 선수가 없습니다."); return; }
     if (!confirm(`${count}명을 대기열로 보내시겠습니까?`)) return;
+    const request = sendCourtPlayersToQueue(court);
+    if (!request) return;
     onBeforeAction?.();
-    await sendCourtPlayersToQueue(court);
+    await request;
   };
 
   const handleRemoveCourt = async () => {
+    if (mutationDisabled) return;
     const count = court.teamA.length + court.teamB.length;
     const msg =
       count > 0
         ? `코트를 삭제하면 ${count}명이 대기열로 이동합니다. 삭제하시겠습니까?`
         : "코트를 삭제하시겠습니까?";
     if (!confirm(msg)) return;
-    const all = [...court.teamA, ...court.teamB];
-    if (all.length > 0) await pushTeamToQueue(all);
-    await deleteCourt(court.id);
+    const request = deleteCourtAndQueuePlayers(court);
+    if (request) await request;
   };
 
   const handleResult = async (winner: "A" | "B") => {
@@ -145,16 +170,23 @@ export default function CourtCard({ court, players, queue, onSlotClick, isActive
       alert("양 팀이 2명씩 있어야 결과를 처리할 수 있습니다.");
       return;
     }
-    if (processing) return;
-    onBeforeAction?.();
+    if (processing || mutationDisabled || resultDisabled) return;
+    if (onResultStart && !onResultStart()) return;
+    const request = processGameResult(court, winner, queue);
+    if (!request) {
+      onResultEnd?.();
+      return;
+    }
     setProcessing(true);
     try {
-      await processGameResult(court, winner, queue);
+      onBeforeAction?.();
+      await request;
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : "오류가 발생했습니다.";
       alert(msg);
     } finally {
       setProcessing(false);
+      onResultEnd?.();
     }
   };
 
@@ -172,26 +204,28 @@ export default function CourtCard({ court, players, queue, onSlotClick, isActive
         {editingName ? (
           <input
             ref={nameInputRef}
+            disabled={mutationDisabled}
             value={nameInput}
             onChange={(e) => setNameInput(e.target.value)}
             onBlur={handleNameSubmit}
             onKeyDown={(e) => { if (e.key === "Enter") handleNameSubmit(); if (e.key === "Escape") { setEditingName(false); setNameInput(court.name); } }}
-            className="flex-1 bg-white/20 text-white font-bold text-lg rounded px-1 outline-none border border-white/50 min-w-0"
+            className="h-11 flex-1 min-w-0 rounded border border-white/50 bg-white/20 px-1 text-lg font-bold text-white outline-none"
           />
         ) : (
           <div className="flex-1 flex items-center gap-1 min-w-0">
             <button
               onClick={() => { setNameInput(court.name); setEditingName(true); }}
+              disabled={mutationDisabled}
               title="탭하여 이름 변경"
-              className="min-w-0 text-lg font-bold text-left hover:text-yellow-300 transition-colors truncate"
+              className="min-h-11 min-w-0 flex-1 truncate text-left text-lg font-bold transition-colors hover:text-yellow-300"
             >
               {court.name}
             </button>
             <button
               onClick={handleAnnounce}
-              disabled={!isReady || processing}
+              disabled={!isReady || processing || mutationDisabled}
               title="이 코트 음성 안내"
-              className="text-white/90 text-xs px-2 py-1 border border-white/40 rounded hover:bg-white/20 disabled:opacity-40 transition-colors shrink-0"
+              className="h-11 min-w-11 shrink-0 rounded border border-white/40 px-2 text-xs text-white/90 transition-colors hover:bg-white/20 disabled:opacity-40"
             >
               음성
             </button>
@@ -200,15 +234,15 @@ export default function CourtCard({ court, players, queue, onSlotClick, isActive
         <div className="flex items-center gap-1.5">
           <button
             onClick={handleSendToQueue}
-            disabled={processing || (court.teamA.length + court.teamB.length === 0)}
-            className="text-white/70 text-xs px-2 py-1 border border-white/30 rounded hover:bg-white/20 hover:text-white disabled:opacity-40 transition-colors"
+            disabled={processing || mutationDisabled || (court.teamA.length + court.teamB.length === 0)}
+            className="h-11 rounded border border-white/30 px-2 text-xs text-white/70 transition-colors hover:bg-white/20 hover:text-white disabled:opacity-40"
           >
             대기열로
           </button>
           <button
             onClick={handleRemoveCourt}
-            disabled={processing}
-            className="text-red-300 text-xs px-2 py-1 border border-red-400 rounded hover:bg-red-500 hover:text-white disabled:opacity-40 transition-colors"
+            disabled={processing || mutationDisabled}
+            className="h-11 min-w-11 rounded border border-red-400 px-2 text-xs text-red-300 transition-colors hover:bg-red-500 hover:text-white disabled:opacity-40"
           >
             삭제
           </button>
@@ -226,7 +260,7 @@ export default function CourtCard({ court, players, queue, onSlotClick, isActive
           labelClass="text-blue-700"
           players={players}
           onSlotClick={onSlotClick}
-          disabled={processing}
+          disabled={processing || mutationDisabled}
           onBeforeAction={onBeforeAction}
         />
         {/* 네트 라인 */}
@@ -242,7 +276,7 @@ export default function CourtCard({ court, players, queue, onSlotClick, isActive
           labelClass="text-green-700"
           players={players}
           onSlotClick={onSlotClick}
-          disabled={processing}
+          disabled={processing || mutationDisabled}
           onBeforeAction={onBeforeAction}
         />
       </div>
@@ -251,7 +285,7 @@ export default function CourtCard({ court, players, queue, onSlotClick, isActive
       <div className="flex gap-2 px-2 pb-2">
         <button
           onClick={() => handleResult("A")}
-          disabled={!isReady || processing}
+          disabled={!isReady || processing || mutationDisabled || resultDisabled}
           className="flex-1 bg-blue-500 text-white rounded-lg font-bold text-base disabled:opacity-30 disabled:cursor-not-allowed hover:bg-blue-600 active:scale-95 transition-all"
           style={{ height: 48 }}
         >
@@ -259,7 +293,7 @@ export default function CourtCard({ court, players, queue, onSlotClick, isActive
         </button>
         <button
           onClick={() => handleResult("B")}
-          disabled={!isReady || processing}
+          disabled={!isReady || processing || mutationDisabled || resultDisabled}
           className="flex-1 bg-green-500 text-white rounded-lg font-bold text-base disabled:opacity-30 disabled:cursor-not-allowed hover:bg-green-600 active:scale-95 transition-all"
           style={{ height: 48 }}
         >

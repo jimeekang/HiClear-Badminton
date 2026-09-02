@@ -22,7 +22,7 @@ import { removePlayersFromQueue } from "@/lib/queue";
 interface Props {
   queue: QueueEntry[];
   players: Player[];
-  onReorder: (reordered: QueueEntry[]) => void;
+  onReorder: (reordered: QueueEntry[]) => Promise<boolean>;
   emptyText?: string;
 }
 
@@ -94,7 +94,7 @@ export default function QueueList({ queue, players, onReorder, emptyText }: Prop
   );
   const getPlayer = (id: string) => players.find((p) => p.id === id);
 
-  const handleDragEnd = (event: DragEndEvent) => {
+  const handleDragEnd = async (event: DragEndEvent) => {
     draggingRef.current = false;
     const { active, over } = event;
     if (!over || active.id === over.id) return;
@@ -103,8 +103,7 @@ export default function QueueList({ queue, players, onReorder, emptyText }: Prop
     const newIndex = localQueue.findIndex((e) => e.id === over.id);
     const reordered = arrayMove(localQueue, oldIndex, newIndex);
 
-    setLocalQueue(reordered);
-    onReorder(reordered);
+    if (await onReorder(reordered)) setLocalQueue(reordered);
   };
 
   return (

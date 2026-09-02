@@ -19,7 +19,7 @@ export default function NavBar() {
           src="/logo.png.jpg"
           alt="HiClear"
           width={100}
-          height={32}
+          height={71}
           style={{ filter: "invert(1)", objectFit: "contain" }}
           priority
         />

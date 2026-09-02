@@ -41,11 +41,16 @@ self.addEventListener("activate", (event) => {
 self.addEventListener("fetch", (event) => {
   const { request } = event;
   const url = new URL(request.url);
+  const isDevelopmentOrigin =
+    url.port === "3000" || url.hostname === "localhost" || url.hostname === "127.0.0.1";
 
   if (request.method !== "GET") return;
   if (NETWORK_ONLY_HOSTS.includes(url.hostname)) return;
-  if (url.pathname.startsWith("/__nextjs")) return;
-  if (url.pathname.startsWith("/_next/webpack-hmr")) return;
+  if (
+    isDevelopmentOrigin &&
+    (url.pathname.startsWith("/_next/") || url.pathname.startsWith("/__nextjs"))
+  )
+    return;
 
   if (request.mode === "navigate") {
     event.respondWith(
